@@ -9,7 +9,7 @@ org.hypercerts.feed.getFeedSkeleton
 org.hypercerts.feed.getFeed
 ```
 
-The skeleton returns URI-only generic feed subjects. The hydrated endpoint returns generic feed entries with validated feed-specific views and actor summaries. Hyperindex is the only supported database owner. The service reads its current PostgreSQL state directly; it does not ingest, write records, own migrations, cache across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, or provide immutable history. Optional service auth verifies the issuer's `#atproto` signing key, audience, expiry, endpoint binding, and DID document over a bounded secure resolver; the verified issuer, never the body, supplies an authenticated viewer.
+The skeleton returns URI-only generic feed subjects. The hydrated endpoint returns generic feed entries with validated feed-specific views and actor summaries. Hyperindex is the only supported database owner. The service reads its current PostgreSQL state directly; it does not ingest, write records, own migrations, cache feed results across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, or provide immutable history. Optional service auth verifies the issuer's `#atproto` signing key, audience, expiry, endpoint binding, and DID document over a bounded secure resolver; the verified issuer, never the body, supplies an authenticated viewer. Verified service-auth `jti` values are consumed once in a bounded replay map local to the auth instance and process.
 
 Use **npm**, not pnpm. `package-lock.json` is authoritative. Node.js 22.13+ is supported; CI and Docker use Node.js 24. PostgreSQL 16+ is required.
 
@@ -89,7 +89,7 @@ src/server.ts
 
 Ownership:
 
-- `src/server.ts` is the composition root. It creates the registered Hypercerts feed, one shared registry, separate endpoint services, one identity adapter, and the configured optional service-auth verifier; it also owns listener settings, initial readiness, and graceful shutdown.
+- `src/server.ts` is the composition root. It creates the registered Hypercerts feed, one shared registry, separate endpoint services, one identity adapter, and the configured optional service-auth verifier; that verifier owns one replay map shared by both endpoints; it also owns listener settings, initial readiness, and graceful shutdown.
 - `src/app.ts` is the fetch-compatible boundary. It owns fixed route metadata, POST enforcement, the 64 KiB body limit, malformed JSON, routed validation messages, and bounded request metrics.
 - `src/api/get-feed-skeleton.ts` and `src/api/get-feed.ts` register the procedures, run generated output validation inside the error boundary, and translate expected `FeedError` values.
 - `src/feed/service.ts` projects registry-selected metadata rows into the public skeleton. It does not own dispatch, cursor, or pagination policy.
@@ -142,6 +142,7 @@ Preserve these unless the public contract is intentionally revised and documente
 
 - Both procedures accept the same `{ feedId, params?, limit?, cursor? }` wrapper. `limit` and `cursor` are generic top-level pagination controls; `params` contains only algorithm-specific values and may be omitted for feeds that declare no params contract. The public params union remains open for future feeds. Runtime dispatch rejects an unregistered `feedId` with `UnsupportedFeed`, while the current Hypercerts feed rejects missing params or a mismatched params discriminator with `InvalidRequest` before querying.
 - The base scope always resolves from the normalized viewer's current Certified follows. Anonymous requests require `params.viewerDid`; authenticated requests may omit it, but a supplied value must exactly match the verified service-auth issuer. There is no caller-supplied author override or body-based override of authenticated identity.
+- Authenticated tokens must carry a non-empty string `jti` of 1–256 UTF-8 bytes. After successful signature and exact `lxm` verification, each issuer-and-`jti` pair is consumed once in the shared process-local replay map, with a maximum of 512 live entries per verified issuer and 4,096 live entries total. Expired entries are purged without evicting live entries; a live full issuer quota or global map fails closed with HTTP 503. The map is cleared on restart and is not replica-global. Downstream failures do not restore a consumed token.
 - Deduplicate request lists before enforcing semantic limits: 64 evaluators, 16 kinds, and 1–50 page items.
 - Evaluator endorsement subjects are unioned after base-author resolution. Remove the viewer and deduplicate candidates. Do not query actor status: Hyperindex purges source records for explicitly deleted, deactivated, suspended, or taken-down identities, and actors absent from `actor` remain eligible.
 - Omitted or empty `kinds` means all supported kinds. Unknown kinds fail with the generic `InvalidRequest` error and an actionable Hypercerts-parameter message.
@@ -181,7 +182,7 @@ Rate limiting belongs at the gateway. Keep `/health` and `/ready` private.
 
 ## MVP exclusions
 
-Do not add ingestion, writes, stronger authentication modes, cross-request caching, immutable history, Hyperindex/PDS/AppView API calls, blob downloads/proxying, target-record reads, target previews, recursive/detail hydration, activity-label hydration, preference persistence, or migrations/indexes. Service-auth verification is limited to the maintained AT Protocol verifier and the bounded DID-resolution boundary described above; never log authorization credentials, JWTs, or claims.
+Do not add ingestion, writes, stronger authentication modes, feed-result caching across requests, immutable history, Hyperindex/PDS/AppView API calls, blob downloads/proxying, target-record reads, target previews, recursive/detail hydration, activity-label hydration, preference persistence, or migrations/indexes. Service-auth verification is limited to the maintained AT Protocol verifier and the bounded DID-resolution boundary described above; keep replay protection bounded and process-local, and never log authorization credentials, JWTs, or claims.
 
 ## Change checklist
 

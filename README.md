@@ -126,6 +126,7 @@ sequenceDiagram
     Client->>HTTP: POST feed procedure + optional Bearer JWT
     HTTP->>XRPC: Bounded, validated JSON
     XRPC->>XRPC: Verify audience, expiry, lxm, #atproto signature
+    XRPC->>XRPC: Validate and consume issuer-scoped jti
     XRPC->>Service: Endpoint input + trusted viewer DID
     Service->>Registry: Load metadata or source-aware page
     Registry->>Feed: Dispatch feedId, optional params, and pagination
@@ -151,7 +152,7 @@ sequenceDiagram
 
 - Malformed JSON, missing required params, anonymous requests without `params.viewerDid`, an authenticated supplied viewer mismatch, an invalid nested `viewerDid`, params that do not match the selected feed, or structurally invalid top-level pagination return HTTP 400 with `InvalidRequest`. Semantically invalid selected-feed parameters or pagination beyond that feed's supported range return HTTP 422 with the same generic error name and an actionable message. An unregistered `feedId` returns `UnsupportedFeed`. These never become internal server errors.
 - A present `Authorization` header is always verified. Malformed, expired, not-yet-valid, wrong-audience, wrong-endpoint, unresolved-issuer, or incorrectly signed service JWTs return HTTP 401; the request is never retried anonymously. DID documents are resolved over bounded HTTPS-only requests with direct public-address pinning; `did:web` redirects and private, loopback, link-local, reserved, and special-use destinations are rejected.
-- Service-auth JWTs include a signed `jti` identifier, which the AT Protocol specification recommends receivers use when replay prevention matters. This service deliberately accepts but does not track or otherwise act on `jti`; it keeps no replay cache because the endpoints are public and read-only, anonymous callers can request the same feed by supplying `params.viewerDid`, and repeated-request abuse belongs at the gateway. A valid token can therefore be reused until it expires.
+- Service-auth JWTs must include a signed, non-empty `jti` no larger than 256 UTF-8 bytes. After signature, audience, expiry, and exact endpoint checks succeed, the service accepts each issuer-and-`jti` pair once. A token is consumed before the downstream feed request runs, so retries require a fresh token even when feed generation fails. Replay state is bounded to 512 live entries per verified issuer and 4,096 live entries total, local to the running process, cleared on restart, and not shared between replicas; a full live issuer quota or global store returns HTTP 503 until entries expire. Anonymous requests remain unaffected because they do not use service-auth replay state.
 - The base scope always comes from the viewer's current `app.certified.graph.follow` records. The service ignores malformed follow subjects.
 - `trustedEvaluators` adds the subjects of every current, active endorsement award from each evaluator.
 - An endorsement definition with no `allowedIssuers` allows any issuer. When it is present, only its listed issuer DIDs qualify. An empty or malformed value allows no issuers.
@@ -336,7 +337,7 @@ Configure a compatible Prometheus collector to read `http://<private-service-hos
 
 Set per-IP rate limits at the gateway. The first public policy allows 60 feed requests per minute for each client IP, with a burst of 20. When a client exceeds the limit, return HTTP 429 with `Retry-After`. Keep health and readiness private and outside this public limit. Adjust the limits using measured query response time and pool saturation.
 
-The process limits request body size, HTTP request receive time, pool size, connection wait time, SQL statement duration, and DID-document resolution time. `REQUEST_TIMEOUT_MS` is not a deadline for the whole handler or query. Feed procedures allow browser requests from every origin and support `POST` preflight requests with `content-type` and `authorization` headers. They do not allow credentialed CORS requests. CORS does not authenticate callers or replace gateway rate limiting. Do not add rate-limit state to this service because separate replicas would disagree.
+The process limits request body size, HTTP request receive time, pool size, connection wait time, SQL statement duration, and DID-document resolution time. `REQUEST_TIMEOUT_MS` is not a deadline for the whole handler or query. Feed procedures allow browser requests from every origin and support `POST` preflight requests with `content-type` and `authorization` headers. They do not allow credentialed CORS requests. CORS does not authenticate callers or replace gateway rate limiting. Do not add rate-limit state to this service because separate replicas would disagree. Service-auth replay state is a separate bounded, process-local safeguard; it is not a distributed rate limiter.
 
 ## Operations
 
@@ -360,4 +361,4 @@ Public errors never show SQL, database credentials, table contents, internal cau
 
 ## MVP boundaries
 
-The service does not ingest data, write records, manage migrations, cache across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, build target previews, recursively hydrate linked records, save preferences, or provide an unchangeable event history. Results show Hyperindex's current, changeable data and its current freshness.
+The service does not ingest data, write records, manage migrations, cache feed results across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, build target previews, recursively hydrate linked records, save preferences, or provide an unchangeable event history. Its bounded service-auth replay state is process-local and is not a feed-result cache. Results show Hyperindex's current, changeable data and its current freshness.
