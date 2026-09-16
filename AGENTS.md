@@ -9,7 +9,7 @@ org.hypercerts.feed.getFeedSkeleton
 org.hypercerts.feed.getFeed
 ```
 
-The skeleton returns URI-only generic feed subjects. The hydrated endpoint returns generic feed entries with validated feed-specific views and actor summaries. Hyperindex is the only supported database owner. The service reads its current PostgreSQL state directly; it does not ingest, write records, own migrations, cache feed results across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, or provide immutable history. Optional service auth verifies the issuer's `#atproto` signing key, audience, expiry, endpoint binding, and DID document over a bounded secure resolver; the verified issuer, never the body, supplies an authenticated viewer. Verified service-auth `jti` values are consumed once in a bounded replay map local to the auth instance and process.
+The skeleton returns URI-only generic feed subjects. The hydrated endpoint returns generic feed entries with validated feed-specific views and actor summaries. Hyperindex is the only supported database owner. The service reads its current PostgreSQL state directly; it does not ingest, write records, own migrations, cache feed results across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, or provide immutable history. Optional service auth verifies the issuer's `#atproto` signing key, audience, expiry, endpoint binding, and DID document over a bounded secure resolver; the verified issuer, never the body, supplies an authenticated viewer. It retains only bounded, process-local replay-protection state through the JWT `jti`; that state is not a feed-result cache.
 
 Use **npm**, not pnpm. `package-lock.json` is authoritative. Node.js 22.13+ is supported; CI and Docker use Node.js 24. PostgreSQL 16+ is required.
 
@@ -182,7 +182,7 @@ Rate limiting belongs at the gateway. Keep `/health` and `/ready` private.
 
 ## MVP exclusions
 
-Do not add ingestion, writes, stronger authentication modes, feed-result caching across requests, immutable history, Hyperindex/PDS/AppView API calls, blob downloads/proxying, target-record reads, target previews, recursive/detail hydration, activity-label hydration, preference persistence, or migrations/indexes. Service-auth verification is limited to the maintained AT Protocol verifier and the bounded DID-resolution boundary described above; keep replay protection bounded and process-local, and never log authorization credentials, JWTs, or claims.
+Do not add ingestion, writes, stronger authentication modes, feed-result caching across requests, immutable history, Hyperindex/PDS/AppView API calls, blob downloads/proxying, target-record reads, target previews, recursive/detail hydration, activity-label hydration, preference persistence, or migrations/indexes. Service-auth verification is limited to the maintained AT Protocol verifier and the bounded DID-resolution boundary described above; retain only bounded, process-local replay-protection state through the JWT `jti`, and never log authorization credentials, JWTs, or claims.
 
 ## Change checklist
 

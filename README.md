@@ -236,7 +236,7 @@ For local development, copy `.env.example` to `.env`. For deployment, copy its v
 | `GRACEFUL_SHUTDOWN_MS` | no | `10000` | Shutdown drain timeout |
 | `TRUSTED_QUALITY_LABELER_DIDS` | no | empty | Comma-separated Orglabeler trust roots |
 
-Service-auth audience verification currently accepts only the bare `SERVICE_DID`. It does not yet accept the combined `did#serviceId` audience proposed by [AT Protocol Proposal 0014](https://github.com/bluesky-social/proposals/blob/main/0014-service-auth-revised/README.md) because `@atproto/lex-server` does not support that audience form. Clients may still use a combined service reference for PDS proxy routing while the reference PDS emits a bare-DID service-auth audience. The verifier should be updated to accept an explicit allowlist of both forms when upstream support becomes available.
+Service-auth audience verification currently accepts only the bare `SERVICE_DID`. [AT Protocol Proposal 0014](https://github.com/bluesky-social/proposals/blob/main/0014-service-auth-revised/README.md) defines the combined `did#serviceId` service reference, but the reference PDS currently emits the bare-DID service-auth audience and `@atproto/lex-server` does not yet support the combined audience form. This is separate from JWT `jti` replay protection, which this service now validates and consumes once per issuer in its bounded process-local replay state. Clients may still use a combined service reference for PDS proxy routing. When upstream support and PDS behavior are ready, update the verifier to accept an explicit allowlist of both audience forms.
 
 If there are no configured trusted labelers, known organizations count as unrated whenever the request includes an organization-quality policy.
 
@@ -361,4 +361,4 @@ Public errors never show SQL, database credentials, table contents, internal cau
 
 ## MVP boundaries
 
-The service does not ingest data, write records, manage migrations, cache feed results across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, build target previews, recursively hydrate linked records, save preferences, or provide an unchangeable event history. Its bounded service-auth replay state is process-local and is not a feed-result cache. Results show Hyperindex's current, changeable data and its current freshness.
+The service does not ingest data, write records, manage migrations, cache feed results across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, build target previews, recursively hydrate linked records, save preferences, or provide an unchangeable event history. It retains only bounded, process-local replay-protection state through the JWT `jti`; that state is not a feed-result cache. Results show Hyperindex's current, changeable data and its current freshness.
