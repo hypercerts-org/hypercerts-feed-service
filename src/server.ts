@@ -2,6 +2,7 @@ import { createServer } from '@atproto/lex-server/nodejs'
 import pino from 'pino'
 
 import { createApp } from './app.js'
+import { createConfiguredServiceAuth } from './auth/service-auth.js'
 import { loadConfig } from './config.js'
 import { Database } from './database.js'
 import { createHypercertsFeed } from './feed/query.js'
@@ -30,11 +31,13 @@ const feeds = new FeedRegistry([hypercertsFeed])
 const feedService = new FeedService(feeds)
 const identities = new PostgresIdentityReader(database)
 const hydratedFeed = new HydratedFeedService(feeds, identities)
+const auth = createConfiguredServiceAuth(config)
 const app = createApp(
   database,
   { skeleton: feedService, hydrated: hydratedFeed },
   metrics,
   logger,
+  auth,
 )
 
 metrics.setReady(false)

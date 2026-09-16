@@ -1,8 +1,10 @@
 import { jsonToLex, type BlobRef } from '@atproto/lex'
+import { LexServerAuthError } from '@atproto/lex-server'
 import pino from 'pino'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createApp, type AppFeedServices } from '../src/app.js'
+import type { ServiceAuthCredentials, OptionalServiceAuth } from '../src/auth/service-auth.js'
 import type { DatabaseCompatibilityChecker } from '../src/database.js'
 import { FeedError, FeedErrorCode } from '../src/feed/errors.js'
 import type { FeedSkeletonReader } from '../src/feed/service.js'
@@ -55,11 +57,33 @@ const feedRequest = (viewerDid = viewer): GetFeedSkeletonInput => ({
   params: { $type: HYPERCERTS_FEED_PARAMS_TYPE, viewerDid },
 })
 
-const post = (url: string, body: string): Request =>
+const post = (
+  url: string,
+  body: string,
+  extraHeaders: HeadersInit = {},
+): Request =>
   new Request(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...extraHeaders },
     body,
+  })
+
+const trustedCredentials = (did: string): ServiceAuthCredentials =>
+  ({ did } as ServiceAuthCredentials)
+
+const authFor = (
+  credentials: ServiceAuthCredentials | undefined,
+  invalidToken = false,
+): OptionalServiceAuth =>
+  vi.fn(async ({ request }) => {
+    if (invalidToken && request.headers.has('authorization')) {
+      throw new LexServerAuthError(
+        'AuthenticationRequired',
+        'Invalid bearer token',
+        { Bearer: { error: 'InvalidToken' } },
+      )
+    }
+    return credentials
   })
 
 describe('HTTP application', () => {
@@ -132,6 +156,140 @@ describe('HTTP application', () => {
     await expect(response.json()).resolves.toEqual({
       feed: [{ subject: uri }],
     })
+  })
+
+  it.each([
+    ['skeleton', skeletonPath],
+    ['hydrated', hydratedPath],
+  ] as const)('binds authenticated omitted viewerDid to the %s service', async (_label, url) => {
+    let received: GetFeedSkeletonInput | undefined
+    const skeleton: FeedSkeletonReader = {
+      getFeedSkeleton: vi.fn(async (input) => {
+        received = input
+        return { feed: [] }
+      }),
+    }
+    const hydrated: HydratedFeedReader = {
+      getFeed: vi.fn(async (input) => {
+        received = input
+        return { feed: [] }
+      }),
+    }
+    const app = createApp(
+      compatibleDatabase,
+      appServices(skeleton, hydrated),
+      new Metrics(),
+      logger,
+      authFor(trustedCredentials(viewer)),
+    )
+
+    const response = await app.fetch(
+      post(
+        url,
+        JSON.stringify({
+          feedId: HYPERCERTS_FEED_ID,
+          params: { $type: HYPERCERTS_FEED_PARAMS_TYPE },
+        }),
+        { authorization: 'Bearer trusted-token' },
+      ),
+    )
+
+    expect(response.status).toBe(200)
+    expect(received).toMatchObject({
+      feedId: HYPERCERTS_FEED_ID,
+      params: { $type: HYPERCERTS_FEED_PARAMS_TYPE, viewerDid: viewer },
+    })
+  })
+
+  it.each([
+    ['skeleton', skeletonPath],
+    ['hydrated', hydratedPath],
+  ] as const)('rejects an authenticated supplied viewer mismatch on the %s route', async (_label, url) => {
+    const getFeedSkeleton = vi.fn()
+    const getFeed = vi.fn()
+    const app = createApp(
+      compatibleDatabase,
+      appServices({ getFeedSkeleton }, { getFeed }),
+      new Metrics(),
+      logger,
+      authFor(trustedCredentials(viewer)),
+    )
+
+    const response = await app.fetch(
+      post(
+        url,
+        JSON.stringify(feedRequest(actor)),
+        { authorization: 'Bearer trusted-token' },
+      ),
+    )
+
+    expect(response.status).toBe(400)
+    expect(getFeedSkeleton).not.toHaveBeenCalled()
+    expect(getFeed).not.toHaveBeenCalled()
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'InvalidRequest',
+      message: expect.stringContaining('does not match the authenticated'),
+    })
+  })
+
+  it.each([
+    ['skeleton', skeletonPath],
+    ['hydrated', hydratedPath],
+  ] as const)('requires viewerDid for anonymous requests on the %s route', async (_label, url) => {
+    const getFeedSkeleton = vi.fn()
+    const getFeed = vi.fn()
+    const app = createApp(
+      compatibleDatabase,
+      appServices({ getFeedSkeleton }, { getFeed }),
+      new Metrics(),
+      logger,
+      authFor(undefined),
+    )
+
+    const response = await app.fetch(
+      post(
+        url,
+        JSON.stringify({
+          feedId: HYPERCERTS_FEED_ID,
+          params: { $type: HYPERCERTS_FEED_PARAMS_TYPE },
+        }),
+      ),
+    )
+
+    expect(response.status).toBe(400)
+    expect(getFeedSkeleton).not.toHaveBeenCalled()
+    expect(getFeed).not.toHaveBeenCalled()
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'InvalidRequest',
+      message: expect.stringContaining('required for anonymous requests'),
+    })
+  })
+
+  it.each([
+    ['skeleton', skeletonPath],
+    ['hydrated', hydratedPath],
+  ] as const)('does not fall back to anonymous on invalid auth for the %s route', async (_label, url) => {
+    const getFeedSkeleton = vi.fn()
+    const getFeed = vi.fn()
+    const app = createApp(
+      compatibleDatabase,
+      appServices({ getFeedSkeleton }, { getFeed }),
+      new Metrics(),
+      logger,
+      authFor(undefined, true),
+    )
+    const token = 'Bearer invalid-token'
+
+    const response = await app.fetch(
+      post(url, JSON.stringify(feedRequest()), { authorization: token }),
+    )
+    const body = await response.text()
+
+    expect(response.status).toBe(401)
+    expect(body).not.toContain(token)
+    expect(body).not.toContain(viewer)
+    expect(getFeedSkeleton).not.toHaveBeenCalled()
+    expect(getFeed).not.toHaveBeenCalled()
   })
 
   it('serves the unauthenticated hydrated POST procedure', async () => {
@@ -225,7 +383,7 @@ describe('HTTP application', () => {
           headers: {
             origin,
             'access-control-request-method': 'POST',
-            'access-control-request-headers': 'content-type',
+            'access-control-request-headers': 'content-type, authorization',
           },
         }),
       )
@@ -234,7 +392,7 @@ describe('HTTP application', () => {
       expect(response.headers.get('access-control-allow-origin')).toBe('*')
       expect(response.headers.get('access-control-allow-methods')).toBe('POST')
       expect(response.headers.get('access-control-allow-headers')).toBe(
-        'content-type',
+        'content-type, authorization',
       )
       expect(response.headers.has('vary')).toBe(false)
     }

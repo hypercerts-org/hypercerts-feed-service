@@ -27,6 +27,8 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "@atproto-labs/did-resolver": "^0.3.7",
+    "@atproto-labs/fetch-node": "^0.3.7",
     "@atproto/lex": "^0.3.8",
     "@atproto/lex-server": "^0.1.9",
     "@atproto/lexicon": "0.6.2",

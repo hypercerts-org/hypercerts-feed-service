@@ -5,6 +5,7 @@ import type { Logger } from 'pino'
 
 import { registerGetFeedSkeleton } from './api/get-feed-skeleton.js'
 import { registerGetFeed } from './api/get-feed.js'
+import type { OptionalServiceAuth } from './auth/service-auth.js'
 import type { DatabaseCompatibilityChecker } from './database.js'
 import { FeedErrorCode } from './feed/errors.js'
 import type { FeedSkeletonReader } from './feed/service.js'
@@ -93,12 +94,15 @@ const corsPreflightResponse = (request: Request): Response => {
   const unsupportedHeader = requestedHeaders
     ?.split(',')
     .map((value) => value.trim().toLowerCase())
-    .find((value) => value !== '' && value !== 'content-type')
+    .find(
+      (value) =>
+        value !== '' && value !== 'content-type' && value !== 'authorization',
+    )
   if (unsupportedHeader !== undefined) {
     return jsonResponse(
       {
         error: FeedErrorCode.InvalidRequest,
-        message: `This feed preflight requests unsupported header ${JSON.stringify(unsupportedHeader)}; retry with content-type only.`,
+        message: `This feed preflight requests unsupported header ${JSON.stringify(unsupportedHeader)}; retry with content-type and authorization only.`,
       },
       400,
     )
@@ -108,7 +112,7 @@ const corsPreflightResponse = (request: Request): Response => {
     status: 204,
     headers: {
       'access-control-allow-methods': 'POST',
-      'access-control-allow-headers': 'content-type',
+      'access-control-allow-headers': 'content-type, authorization',
       'access-control-max-age': '600',
     },
   })
@@ -331,6 +335,7 @@ export const createApp = (
   services: AppFeedServices,
   metrics: Metrics,
   logger: Logger,
+  auth?: OptionalServiceAuth,
 ): { fetch: FetchHandler } => {
   const router = new LexRouter({
     onHandlerError: ({ error, method }) => {
@@ -338,8 +343,8 @@ export const createApp = (
       logger.error({ err: error, nsid: method.nsid }, 'unexpected XRPC handler error')
     },
   })
-  registerGetFeedSkeleton(router, services.skeleton, logger)
-  registerGetFeed(router, services.hydrated, logger)
+  registerGetFeedSkeleton(router, services.skeleton, logger, auth)
+  registerGetFeed(router, services.hydrated, logger, auth)
 
   const fetch: FetchHandler = async (request) => {
     const startedAt = performance.now()
