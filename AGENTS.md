@@ -11,7 +11,7 @@ org.hypercerts.feed.getFeed
 
 The skeleton returns URI-only generic feed subjects. The hydrated endpoint returns generic feed entries with validated feed-specific views and actor summaries. Hyperindex is the only supported database owner. The service reads its current PostgreSQL state directly; it does not ingest, write records, own migrations, cache feed results across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, or provide immutable history. Optional service auth verifies the issuer's `#atproto` signing key, audience, expiry, endpoint binding, and DID document over a bounded secure resolver; the verified issuer, never the body, supplies an authenticated viewer. It retains only bounded, process-local replay-protection state through the JWT `jti`; that state is not a feed-result cache.
 
-Use **npm**, not pnpm. `package-lock.json` is authoritative. Node.js 22.13+ is supported; CI and Docker use Node.js 24. PostgreSQL 16+ is required.
+Use **npm**, not pnpm. `package-lock.json` is authoritative. Node.js 22.19+ is supported; CI and Docker use Node.js 24. PostgreSQL 16+ is required.
 
 Before changing feed behavior, read together:
 

@@ -38,7 +38,7 @@ const workflowStep = (source: string, name: string): string => {
 describe('release workflow', () => {
   test('configures Changesets for private GitHub releases from main', () => {
     expect(packageJson.private).toBe(true)
-    expect(packageJson.engines?.node).toBe('>=22.13')
+    expect(packageJson.engines?.node).toBe('>=22.19.0')
     expect(packageJson.scripts['changeset']).toBe('changeset')
     expect(packageJson.scripts['changeset:empty']).toBe('changeset --empty')
     expect(packageJson.scripts['changeset:status']).toBe('changeset status')
