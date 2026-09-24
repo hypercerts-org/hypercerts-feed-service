@@ -25,6 +25,7 @@ describe('Database', () => {
   it('keeps one connection warm and drains excess idle connections', () => {
     const config = loadConfig({
       DATABASE_URL: 'postgres://feed:secret@localhost:5432/indexer',
+      SERVICE_DID: 'did:web:feed.example',
       DATABASE_MAX_CONNECTIONS: '5',
       DATABASE_IDLE_TIMEOUT_MS: '120000',
     })

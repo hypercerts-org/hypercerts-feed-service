@@ -109,7 +109,7 @@ describe('Hypercerts SQL feed definition', () => {
       feed.loadPage({ $type: paramsType }, {}, 'metadata'),
     ).rejects.toMatchObject({
       code: 'InvalidRequest',
-      message: expect.stringContaining('Missing required key "viewerDid"'),
+      message: expect.stringContaining('viewerDid is not a valid DID'),
     })
     await expect(
       feed.loadPage(
