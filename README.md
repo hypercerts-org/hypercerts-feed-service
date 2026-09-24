@@ -3,13 +3,13 @@
 A standalone, read-only TypeScript service. It reads the current PostgreSQL data owned by Hyperindex and serves ordered Hypercerts feeds over XRPC.
 
 
-Hyperindex is the only supported owner of the database. The service provides a URI-only skeleton and a hydrated feed with generic entries and feed-specific views. It does not ingest or change indexed data, import Hyperindex code, call the Hyperindex GraphQL API, authenticate callers, fetch blob bytes, or provide an unchangeable event history.
+Hyperindex is the only supported owner of the database. The service provides a URI-only skeleton and a hydrated feed with generic entries and feed-specific views. It does not ingest or change indexed data, import Hyperindex code, call the Hyperindex GraphQL API, write records, fetch blob bytes, or provide an unchangeable event history. Feed authentication is optional AT Protocol service authentication; it never trusts a body viewer over the verified issuer.
 
 ## Endpoints
 
-`GET /` returns a small JSON description of the service and lists its public XRPC procedures. It does not query the database or report service readiness.
+`GET /` returns a small JSON description of the service and lists its public XRPC procedures. It does not query the database or report service readiness. For a hostname-level `did:web` configured as `SERVICE_DID`, `GET /.well-known/did.json` publishes a DID document with a `#hypercerts_feed` service entry (`HypercertsFeedService`) pointing to the HTTPS origin derived from that DID. The route uses the configured DID, not the request hostname. Non-`did:web` service DIDs do not publish a document here.
 
-Both feed endpoints are unauthenticated POST procedures. They use the same `{ feedId, params?, limit?, cursor? }` request wrapper, feed-scoped cursor contract, and stable public errors. `params` contains only algorithm-specific values; pagination is generic and top-level. The registered Hypercerts feed requires `params.viewerDid` to choose the viewer scope. The service does not check it against an authenticated caller:
+Both feed endpoints are POST procedures with optional AT Protocol service authentication. They use the same `{ feedId, params?, limit?, cursor? }` request wrapper, feed-scoped cursor contract, and stable public errors. `params` contains only algorithm-specific values; pagination is generic and top-level. The registered Hypercerts feed requires the Hypercerts params object and discriminator. Anonymous requests must include `params.viewerDid`; authenticated callers may omit it, and the verified JWT issuer supplies the viewer. A supplied viewer DID must match the issuer:
 
 ```text
 POST /xrpc/org.hypercerts.feed.getFeedSkeleton
@@ -41,7 +41,7 @@ curl -sS http://localhost:3000/xrpc/org.hypercerts.feed.getFeed \
   }'
 ```
 
-Use the same body with `getFeedSkeleton` when another data system needs only ordered source AT-URIs. The public params union is open for future feed algorithms, including algorithms that accept no params. This service currently registers only `org.hypercerts.feed.defs#hypercertsFeed` and requires `org.hypercerts.feed.defs#hypercertsFeedParams`; missing params or a mismatched `$type` returns `InvalidRequest`, while an unknown `feedId` returns `UnsupportedFeed`.
+Use the same body with `getFeedSkeleton` when another data system needs only ordered source AT-URIs. A service caller may add `-H 'authorization: Bearer <service-auth-jwt>'` and omit `viewerDid`; the token must target the bare DID configured as `SERVICE_DID`, carry the exact endpoint NSID in `lxm`, and be signed by the issuer's `#atproto` key. Invalid supplied authorization returns 401 and is never treated as anonymous. The public params union is open for future feed algorithms, including algorithms that accept no params. This service currently registers only `org.hypercerts.feed.defs#hypercertsFeed` and requires `org.hypercerts.feed.defs#hypercertsFeedParams`; missing params or a mismatched `$type` returns `InvalidRequest`, while an unknown `feedId` returns `UnsupportedFeed`.
 
 ### Skeleton response
 
@@ -123,9 +123,11 @@ sequenceDiagram
     participant Identity as Identity Reader
     participant DB as Hyperindex PostgreSQL
 
-    Client->>HTTP: POST feed procedure
+    Client->>HTTP: POST feed procedure + optional Bearer JWT
     HTTP->>XRPC: Bounded, validated JSON
-    XRPC->>Service: Endpoint input
+    XRPC->>XRPC: Verify audience, expiry, lxm, #atproto signature
+    XRPC->>XRPC: Validate and consume issuer-scoped jti
+    XRPC->>Service: Endpoint input + trusted viewer DID
     Service->>Registry: Load metadata or source-aware page
     Registry->>Feed: Dispatch feedId, optional params, and pagination
     Feed->>DB: One normalized Hyperindex selection statement
@@ -148,7 +150,9 @@ sequenceDiagram
 
 ## Request behavior
 
-- Malformed JSON, missing required params, an invalid nested `viewerDid`, params that do not match the selected feed, or structurally invalid top-level pagination return HTTP 400 with `InvalidRequest`. Semantically invalid selected-feed parameters or pagination beyond that feed's supported range return HTTP 422 with the same generic error name and an actionable message. An unregistered `feedId` returns `UnsupportedFeed`. These never become internal server errors.
+- Malformed JSON, missing required params, anonymous requests without `params.viewerDid`, an authenticated supplied viewer mismatch, an invalid nested `viewerDid`, params that do not match the selected feed, or structurally invalid top-level pagination return HTTP 400 with `InvalidRequest`. Semantically invalid selected-feed parameters or pagination beyond that feed's supported range return HTTP 422 with the same generic error name and an actionable message. An unregistered `feedId` returns `UnsupportedFeed`. These never become internal server errors.
+- A present `Authorization` header is always verified. Malformed, expired, not-yet-valid, wrong-audience, wrong-endpoint, unresolved-issuer, or incorrectly signed service JWTs return HTTP 401; the request is never retried anonymously. DID documents are resolved over bounded HTTPS-only requests with direct public-address pinning; `did:web` redirects and private, loopback, link-local, reserved, and special-use destinations are rejected.
+- Service-auth JWTs must include a signed, non-empty `jti` no larger than 256 UTF-8 bytes. After signature, audience, expiry, and exact endpoint checks succeed, the service accepts each issuer-and-`jti` pair once. A token is consumed before the downstream feed request runs, so retries require a fresh token even when feed generation fails. Replay state is bounded to 512 live entries per verified issuer and 4,096 live entries total, local to the running process, cleared on restart, and not shared between replicas; a full live issuer quota or global store returns HTTP 503 until entries expire. Anonymous requests remain unaffected because they do not use service-auth replay state.
 - The base scope always comes from the viewer's current `app.certified.graph.follow` records. The service ignores malformed follow subjects.
 - `trustedEvaluators` adds the subjects of every current, active endorsement award from each evaluator.
 - An endorsement definition with no `allowedIssuers` allows any issuer. When it is present, only its listed issuer DIDs qualify. An empty or malformed value allows no issuers.
@@ -216,6 +220,9 @@ For local development, copy `.env.example` to `.env`. For deployment, copy its v
 | Variable | Required | Default | Purpose |
 |---|---:|---:|---|
 | `DATABASE_URL` | yes | | Dedicated read-only Postgres URL for the Hyperindex database |
+| `SERVICE_DID` | yes | | DID identifying this service and required as the service-auth JWT audience |
+| `SERVICE_AUTH_MAX_AGE_SECONDS` | no | `300` | Maximum service-auth JWT age; bounded from 1 through 3600 seconds |
+| `DID_RESOLUTION_TIMEOUT_MS` | no | `2000` | Total timeout for one HTTPS DID-document resolution; bounded from 100 through 60000 ms |
 | `PORT` | no | `3000` | HTTP listen port |
 | `HOST` | no | `0.0.0.0` | Public HTTP listen interface |
 | `METRICS_HOST` | no | `0.0.0.0` | Private metrics listen interface; used only when `METRICS_PORT` is set |
@@ -228,6 +235,10 @@ For local development, copy `.env.example` to `.env`. For deployment, copy its v
 | `REQUEST_TIMEOUT_MS` | no | `10000` | Maximum time allowed to receive an HTTP request; not a handler or database deadline |
 | `GRACEFUL_SHUTDOWN_MS` | no | `10000` | Shutdown drain timeout |
 | `TRUSTED_QUALITY_LABELER_DIDS` | no | empty | Comma-separated Orglabeler trust roots |
+
+For example, set `SERVICE_DID=did:web:dev.feed.hypercerts.dev` only when `https://dev.feed.hypercerts.dev` routes to this service; clients can discover its XRPC endpoint using `did:web:dev.feed.hypercerts.dev#hypercerts_feed`. This service does not publish a signing key: it verifies callers using their own DID documents. The DID service entry is for discovery and does not change JWT audience validation.
+
+Service-auth audience verification currently accepts only the bare `SERVICE_DID`. [AT Protocol Proposal 0014](https://github.com/bluesky-social/proposals/blob/main/0014-service-auth-revised/README.md) defines the combined `did#serviceId` service reference, but the reference PDS currently emits the bare-DID service-auth audience and `@atproto/lex-server` does not yet support the combined audience form. This is separate from JWT `jti` replay protection, which this service now validates and consumes once per issuer in its bounded process-local replay state. Clients may still use a combined service reference for PDS proxy routing. When upstream support and PDS behavior are ready, update the verifier to accept an explicit allowlist of both audience forms.
 
 If there are no configured trusted labelers, known organizations count as unrated whenever the request includes an organization-quality policy.
 
@@ -310,6 +321,7 @@ See [`docs/RELEASING.md`](docs/RELEASING.md) for the contributor and maintainer 
 docker build -t hypercerts-feed-service .
 docker run --rm -p 3000:3000 \
   -e DATABASE_URL='postgresql://...' \
+  -e SERVICE_DID='did:web:feed.example' \
   -e TRUSTED_QUALITY_LABELER_DIDS='did:plc:ar7c4by46qjdydhdevvrndac' \
   hypercerts-feed-service
 ```
@@ -327,10 +339,11 @@ Configure a compatible Prometheus collector to read `http://<private-service-hos
 
 Set per-IP rate limits at the gateway. The first public policy allows 60 feed requests per minute for each client IP, with a burst of 20. When a client exceeds the limit, return HTTP 429 with `Retry-After`. Keep health and readiness private and outside this public limit. Adjust the limits using measured query response time and pool saturation.
 
-The process limits request body size, HTTP request receive time, pool size, connection wait time, and SQL statement duration. `REQUEST_TIMEOUT_MS` is not a deadline for the whole handler or query. Feed procedures allow browser requests from every origin and support `POST` preflight requests. They do not allow credentialed CORS requests. CORS does not authenticate callers or replace gateway rate limiting. Do not add rate-limit state to this service because separate replicas would disagree.
+The process limits request body size, HTTP request receive time, pool size, connection wait time, SQL statement duration, and DID-document resolution time. `REQUEST_TIMEOUT_MS` is not a deadline for the whole handler or query. After a complete POST body is buffered, downstream authentication uses a fresh signal because the current `@atproto/lex-server/nodejs` adapter aborts its request signal when the body ends normally. A client disconnect after the full body is received therefore does not cancel authentication or feed work; DID resolution and database timeouts still apply. Feed procedures allow browser requests from every origin and support `POST` preflight requests with `content-type` and `authorization` headers. They do not allow credentialed CORS requests. CORS does not authenticate callers or replace gateway rate limiting. Do not add rate-limit state to this service because separate replicas would disagree. Service-auth replay state is a separate bounded, process-local safeguard; it is not a distributed rate limiter.
 
 ## Operations
 
+- `GET /.well-known/did.json`: serves the configured hostname-level `did:web` identity and `#hypercerts_feed` service entry; its endpoint comes from `SERVICE_DID`, not the request hostname.
 - `GET /health`: checks only whether the process is alive.
 - `GET /ready`: checks current database support and read-only state; the runtime schema contract is documented separately.
 - Private metrics listener: when `METRICS_PORT` is set, `GET /metrics` exposes this replica's metrics in Prometheus-compatible exposition format on `METRICS_HOST:METRICS_PORT`; all other paths are rejected.
@@ -351,4 +364,4 @@ Public errors never show SQL, database credentials, table contents, internal cau
 
 ## MVP boundaries
 
-The service does not ingest data, authenticate callers, write records, manage migrations, cache across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, build target previews, recursively hydrate linked records, save preferences, discover the network, or provide an unchangeable event history. Results show Hyperindex's current, changeable data and its current freshness.
+The service does not ingest data, write records, manage migrations, cache feed results across requests, call Hyperindex/PDS/AppView APIs, download blobs, hydrate target records, build target previews, recursively hydrate linked records, save preferences, or provide an unchangeable event history. It retains only bounded, process-local replay-protection state through the JWT `jti`; that state is not a feed-result cache. Results show Hyperindex's current, changeable data and its current freshness.

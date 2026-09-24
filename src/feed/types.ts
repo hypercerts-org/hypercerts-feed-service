@@ -61,7 +61,7 @@ export interface OrganizationQualityPolicyInput {
 export interface HypercertsFeedParams {
   readonly $type: typeof HYPERCERTS_FEED_PARAMS_TYPE
   /** Viewer whose current Certified outbound follows supply the base scope. */
-  readonly viewerDid: string
+  readonly viewerDid?: string
   /** Evaluators whose active endorsement subjects are added to the base scope. */
   readonly trustedEvaluators?: readonly string[]
   /** Optional organization-quality membership policy. */

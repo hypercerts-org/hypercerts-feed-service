@@ -9,14 +9,13 @@
     },
     "hypercertsFeedParams": {
       "type": "object",
-      "required": ["viewerDid"],
-      "description": "Parameters accepted by the Hypercerts viewer-scope feed algorithm.",
+      "description": "Parameters accepted by the Hypercerts viewer-scope feed algorithm. Anonymous requests must provide viewerDid; authenticated service requests may omit it.",
       "properties": {
         "viewerDid": {
           "type": "string",
           "format": "did",
           "maxLength": 256,
-          "description": "Viewer whose current Certified follows supply the base author scope."
+          "description": "Viewer whose current Certified follows supply the base author scope. Required for anonymous requests; authenticated service requests use the verified issuer when omitted."
         },
         "trustedEvaluators": {
           "type": "array",

@@ -39,7 +39,8 @@ export const normalizeFeedRequest = (
   input: HypercertsFeedParams,
   pagination: FeedPagination = {},
 ): NormalizedFeedRequest => {
-  if (!isValidDid(input.viewerDid)) {
+  const viewerDid = input.viewerDid
+  if (typeof viewerDid !== 'string' || !isValidDid(viewerDid)) {
     throw invalidFeedParams(
       'viewerDid is not a valid DID; provide the viewer account as a syntactically valid DID.',
     )
@@ -90,7 +91,7 @@ export const normalizeFeedRequest = (
   }
 
   return {
-    viewerDid: input.viewerDid,
+    viewerDid,
     trustedEvaluators,
     ...(organizationQuality ? { organizationQuality } : {}),
     limit,
