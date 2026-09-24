@@ -7,7 +7,7 @@ Hyperindex is the only supported owner of the database. The service provides a U
 
 ## Endpoints
 
-`GET /` returns a small JSON description of the service and lists its public XRPC procedures. It does not query the database or report service readiness.
+`GET /` returns a small JSON description of the service and lists its public XRPC procedures. It does not query the database or report service readiness. For a hostname-level `did:web` configured as `SERVICE_DID`, `GET /.well-known/did.json` publishes a DID document on that hostname with a `#hypercerts_feed` service entry (`HypercertsFeedService`) pointing to its HTTPS origin. Other hostnames and non-`did:web` service DIDs do not publish a document here.
 
 Both feed endpoints are POST procedures with optional AT Protocol service authentication. They use the same `{ feedId, params?, limit?, cursor? }` request wrapper, feed-scoped cursor contract, and stable public errors. `params` contains only algorithm-specific values; pagination is generic and top-level. The registered Hypercerts feed requires the Hypercerts params object and discriminator. Anonymous requests must include `params.viewerDid`; authenticated callers may omit it, and the verified JWT issuer supplies the viewer. A supplied viewer DID must match the issuer:
 
@@ -236,6 +236,8 @@ For local development, copy `.env.example` to `.env`. For deployment, copy its v
 | `GRACEFUL_SHUTDOWN_MS` | no | `10000` | Shutdown drain timeout |
 | `TRUSTED_QUALITY_LABELER_DIDS` | no | empty | Comma-separated Orglabeler trust roots |
 
+For example, set `SERVICE_DID=did:web:dev.feed.hypercerts.dev` only when `https://dev.feed.hypercerts.dev` routes to this service; clients can discover its XRPC endpoint using `did:web:dev.feed.hypercerts.dev#hypercerts_feed`. This service does not publish a signing key: it verifies callers using their own DID documents. The DID service entry is for discovery and does not change JWT audience validation.
+
 Service-auth audience verification currently accepts only the bare `SERVICE_DID`. [AT Protocol Proposal 0014](https://github.com/bluesky-social/proposals/blob/main/0014-service-auth-revised/README.md) defines the combined `did#serviceId` service reference, but the reference PDS currently emits the bare-DID service-auth audience and `@atproto/lex-server` does not yet support the combined audience form. This is separate from JWT `jti` replay protection, which this service now validates and consumes once per issuer in its bounded process-local replay state. Clients may still use a combined service reference for PDS proxy routing. When upstream support and PDS behavior are ready, update the verifier to accept an explicit allowlist of both audience forms.
 
 If there are no configured trusted labelers, known organizations count as unrated whenever the request includes an organization-quality policy.
@@ -341,6 +343,7 @@ The process limits request body size, HTTP request receive time, pool size, conn
 
 ## Operations
 
+- `GET /.well-known/did.json`: serves the configured hostname-level `did:web` identity and `#hypercerts_feed` service entry only on that DID's hostname.
 - `GET /health`: checks only whether the process is alive.
 - `GET /ready`: checks current database support and read-only state; the runtime schema contract is documented separately.
 - Private metrics listener: when `METRICS_PORT` is set, `GET /metrics` exposes this replica's metrics in Prometheus-compatible exposition format on `METRICS_HOST:METRICS_PORT`; all other paths are rejected.

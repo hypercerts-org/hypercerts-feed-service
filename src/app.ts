@@ -64,6 +64,7 @@ const routeLabel = (pathname: string): string => {
   if (pathname === '/') return 'root'
   if (pathname === '/health') return 'health'
   if (pathname === '/ready') return 'ready'
+  if (pathname === '/.well-known/did.json') return 'did_document'
   return feedRoute(pathname)?.label ?? 'other'
 }
 
@@ -249,6 +250,29 @@ const handleHealthRequest = (request: Request): Response =>
     ? jsonResponse({ status: 'ok' })
     : methodNotAllowed('GET')
 
+const handleDidDocumentRequest = (
+  request: Request,
+  serviceDid: string | undefined,
+): Response => {
+  const hostname = new URL(request.url).hostname
+  if (serviceDid !== `did:web:${hostname}`) {
+    return new Response(null, { status: 404 })
+  }
+  if (request.method !== 'GET') return methodNotAllowed('GET')
+
+  return jsonResponse({
+    '@context': ['https://www.w3.org/ns/did/v1'],
+    id: serviceDid,
+    service: [
+      {
+        id: '#hypercerts_feed',
+        type: 'HypercertsFeedService',
+        serviceEndpoint: `https://${hostname}`,
+      },
+    ],
+  })
+}
+
 const handleReadyRequest = async (
   request: Request,
   database: DatabaseCompatibilityChecker,
@@ -304,6 +328,7 @@ const handleRequest = async (
   database: DatabaseCompatibilityChecker,
   router: LexRouter,
   metrics: Metrics,
+  serviceDid: string | undefined,
 ): Promise<Response> => {
   const matchedFeedRoute = feedRoute(pathname)
 
@@ -316,6 +341,8 @@ const handleRequest = async (
     response = handleHealthRequest(request)
   } else if (pathname === '/ready') {
     response = await handleReadyRequest(request, database, metrics)
+  } else if (pathname === '/.well-known/did.json') {
+    response = handleDidDocumentRequest(request, serviceDid)
   } else {
     response = await handleFeedRequest(request, matchedFeedRoute, router)
   }
@@ -336,6 +363,7 @@ export const createApp = (
   metrics: Metrics,
   logger: Logger,
   auth?: OptionalServiceAuth,
+  serviceDid?: string,
 ): { fetch: FetchHandler } => {
   const router = new LexRouter({
     onHandlerError: ({ error, method }) => {
@@ -359,6 +387,7 @@ export const createApp = (
         database,
         router,
         metrics,
+        serviceDid,
       )
       status = response.status
       if (matchedFeedRoute !== undefined) {

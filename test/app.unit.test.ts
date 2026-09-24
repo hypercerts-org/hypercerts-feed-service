@@ -112,6 +112,71 @@ describe('HTTP application', () => {
     expect(metricText).toContain('route="root"')
   })
 
+  it('publishes the configured did:web feed service at its canonical domain', async () => {
+    const app = createApp(
+      compatibleDatabase,
+      appServices(),
+      new Metrics(),
+      logger,
+      undefined,
+      'did:web:dev.feed.hypercerts.dev',
+    )
+
+    const response = await app.fetch(
+      new Request('https://dev.feed.hypercerts.dev/.well-known/did.json'),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('application/json')
+    await expect(response.json()).resolves.toEqual({
+      '@context': ['https://www.w3.org/ns/did/v1'],
+      id: 'did:web:dev.feed.hypercerts.dev',
+      service: [
+        {
+          id: '#hypercerts_feed',
+          type: 'HypercertsFeedService',
+          serviceEndpoint: 'https://dev.feed.hypercerts.dev',
+        },
+      ],
+    })
+  })
+
+  it('does not claim a different hostname or a non-web DID', async () => {
+    for (const [serviceDid, hostname] of [
+      ['did:web:dev.feed.hypercerts.dev', 'other.example'],
+      ['did:plc:ar7c4by46qjdydhdevvrndac', 'dev.feed.hypercerts.dev'],
+    ]) {
+      const app = createApp(
+        compatibleDatabase,
+        appServices(),
+        new Metrics(),
+        logger,
+        undefined,
+        serviceDid,
+      )
+      const response = await app.fetch(
+        new Request(`https://${hostname}/.well-known/did.json`),
+      )
+      expect(response.status).toBe(404)
+    }
+  })
+
+  it('rejects non-GET requests to the DID document', async () => {
+    const app = createApp(
+      compatibleDatabase,
+      appServices(),
+      new Metrics(),
+      logger,
+      undefined,
+      'did:web:dev.feed.hypercerts.dev',
+    )
+    const response = await app.fetch(
+      post('https://dev.feed.hypercerts.dev/.well-known/did.json', '{}'),
+    )
+    expect(response.status).toBe(405)
+    expect(response.headers.get('allow')).toBe('GET')
+  })
+
   it('rejects non-GET requests to the root route', async () => {
     const app = createApp(
       compatibleDatabase,

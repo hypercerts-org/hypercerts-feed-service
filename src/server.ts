@@ -38,6 +38,7 @@ const app = createApp(
   metrics,
   logger,
   auth,
+  config.serviceDid,
 )
 
 metrics.setReady(false)
