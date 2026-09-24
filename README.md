@@ -7,7 +7,7 @@ Hyperindex is the only supported owner of the database. The service provides a U
 
 ## Endpoints
 
-`GET /` returns a small JSON description of the service and lists its public XRPC procedures. It does not query the database or report service readiness. For a hostname-level `did:web` configured as `SERVICE_DID`, `GET /.well-known/did.json` publishes a DID document on that hostname with a `#hypercerts_feed` service entry (`HypercertsFeedService`) pointing to its HTTPS origin. Other hostnames and non-`did:web` service DIDs do not publish a document here.
+`GET /` returns a small JSON description of the service and lists its public XRPC procedures. It does not query the database or report service readiness. For a hostname-level `did:web` configured as `SERVICE_DID`, `GET /.well-known/did.json` publishes a DID document with a `#hypercerts_feed` service entry (`HypercertsFeedService`) pointing to the HTTPS origin derived from that DID. The route uses the configured DID, not the request hostname. Non-`did:web` service DIDs do not publish a document here.
 
 Both feed endpoints are POST procedures with optional AT Protocol service authentication. They use the same `{ feedId, params?, limit?, cursor? }` request wrapper, feed-scoped cursor contract, and stable public errors. `params` contains only algorithm-specific values; pagination is generic and top-level. The registered Hypercerts feed requires the Hypercerts params object and discriminator. Anonymous requests must include `params.viewerDid`; authenticated callers may omit it, and the verified JWT issuer supplies the viewer. A supplied viewer DID must match the issuer:
 
@@ -343,7 +343,7 @@ The process limits request body size, HTTP request receive time, pool size, conn
 
 ## Operations
 
-- `GET /.well-known/did.json`: serves the configured hostname-level `did:web` identity and `#hypercerts_feed` service entry only on that DID's hostname.
+- `GET /.well-known/did.json`: serves the configured hostname-level `did:web` identity and `#hypercerts_feed` service entry; its endpoint comes from `SERVICE_DID`, not the request hostname.
 - `GET /health`: checks only whether the process is alive.
 - `GET /ready`: checks current database support and read-only state; the runtime schema contract is documented separately.
 - Private metrics listener: when `METRICS_PORT` is set, `GET /metrics` exposes this replica's metrics in Prometheus-compatible exposition format on `METRICS_HOST:METRICS_PORT`; all other paths are rejected.

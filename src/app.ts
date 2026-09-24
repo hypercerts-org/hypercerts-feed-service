@@ -254,8 +254,8 @@ const handleDidDocumentRequest = (
   request: Request,
   serviceDid: string | undefined,
 ): Response => {
-  const hostname = new URL(request.url).hostname
-  if (serviceDid !== `did:web:${hostname}`) {
+  const hostname = serviceDid?.match(/^did:web:([a-z0-9.-]+)$/)?.[1]
+  if (hostname === undefined) {
     return new Response(null, { status: 404 })
   }
   if (request.method !== 'GET') return methodNotAllowed('GET')

@@ -141,24 +141,47 @@ describe('HTTP application', () => {
     })
   })
 
-  it('does not claim a different hostname or a non-web DID', async () => {
-    for (const [serviceDid, hostname] of [
-      ['did:web:dev.feed.hypercerts.dev', 'other.example'],
-      ['did:plc:ar7c4by46qjdydhdevvrndac', 'dev.feed.hypercerts.dev'],
-    ]) {
-      const app = createApp(
-        compatibleDatabase,
-        appServices(),
-        new Metrics(),
-        logger,
-        undefined,
-        serviceDid,
-      )
-      const response = await app.fetch(
-        new Request(`https://${hostname}/.well-known/did.json`),
-      )
-      expect(response.status).toBe(404)
-    }
+  it('uses the configured production DID rather than the request hostname', async () => {
+    const app = createApp(
+      compatibleDatabase,
+      appServices(),
+      new Metrics(),
+      logger,
+      undefined,
+      'did:web:feed.hypercerts.dev',
+    )
+
+    const response = await app.fetch(
+      new Request('https://other.example/.well-known/did.json'),
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      '@context': ['https://www.w3.org/ns/did/v1'],
+      id: 'did:web:feed.hypercerts.dev',
+      service: [
+        {
+          id: '#hypercerts_feed',
+          type: 'HypercertsFeedService',
+          serviceEndpoint: 'https://feed.hypercerts.dev',
+        },
+      ],
+    })
+  })
+
+  it('does not publish a did:web document for a non-web DID', async () => {
+    const app = createApp(
+      compatibleDatabase,
+      appServices(),
+      new Metrics(),
+      logger,
+      undefined,
+      'did:plc:ar7c4by46qjdydhdevvrndac',
+    )
+    const response = await app.fetch(
+      new Request('https://dev.feed.hypercerts.dev/.well-known/did.json'),
+    )
+    expect(response.status).toBe(404)
   })
 
   it('rejects non-GET requests to the DID document', async () => {
