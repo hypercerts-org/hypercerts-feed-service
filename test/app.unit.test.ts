@@ -92,6 +92,7 @@ describe('HTTP application', () => {
   it('keeps authentication usable after a real HTTP POST body has been read', async () => {
     const auth: OptionalServiceAuth = async ({ request }) => {
       request.signal.throwIfAborted()
+      expect(request.headers.get('authorization')).toBe('Bearer test-token')
       return trustedCredentials(viewer)
     }
     const app = createApp(
