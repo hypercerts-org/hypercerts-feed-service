@@ -150,11 +150,14 @@ const readBoundedRequest = async (
   }
   const headers = new Headers(request.headers)
   headers.set('content-length', String(size))
+  // lex-server/nodejs aborts request.signal when the incoming body ends, even
+  // on a successful upload (bluesky-social/atproto#5546). Do not pass that
+  // stale signal to DID resolution. After buffering, client disconnects no
+  // longer cancel auth/feed work; DID resolution and database timeouts remain.
   return new Request(request.url, {
     method: request.method,
     headers,
     body,
-    signal: request.signal,
   })
 }
 

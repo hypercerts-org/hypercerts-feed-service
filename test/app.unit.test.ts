@@ -1,5 +1,7 @@
 import { jsonToLex, type BlobRef } from '@atproto/lex'
 import { LexServerAuthError } from '@atproto/lex-server'
+import { createServer } from '@atproto/lex-server/nodejs'
+import type { AddressInfo } from 'node:net'
 import pino from 'pino'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -87,6 +89,55 @@ const authFor = (
   })
 
 describe('HTTP application', () => {
+  it('keeps authentication usable after a real HTTP POST body has been read', async () => {
+    const auth: OptionalServiceAuth = async ({ request }) => {
+      request.signal.throwIfAborted()
+      return trustedCredentials(viewer)
+    }
+    const app = createApp(
+      compatibleDatabase,
+      appServices(),
+      new Metrics(),
+      logger,
+      auth,
+    )
+    const server = createServer(app)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+
+    try {
+      const address = server.address() as AddressInfo
+      for (const method of [
+        'org.hypercerts.feed.getFeedSkeleton',
+        'org.hypercerts.feed.getFeed',
+      ]) {
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/xrpc/${method}`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              authorization: 'Bearer test-token',
+            },
+            body: JSON.stringify({
+              feedId: HYPERCERTS_FEED_ID,
+              params: { $type: HYPERCERTS_FEED_PARAMS_TYPE },
+              limit: 1,
+            }),
+          },
+        )
+        expect(response.status).toBe(200)
+        await expect(response.json()).resolves.toEqual({ feed: [] })
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()))
+      })
+    }
+  })
+
   it('describes the service at the root route', async () => {
     const metrics = new Metrics()
     const app = createApp(

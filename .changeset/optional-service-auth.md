@@ -8,4 +8,4 @@ Replay protection allows up to 512 live entries per verified issuer and 4,096 li
 
 Before upgrading, set `SERVICE_DID` to this service's DID, even if you do not use authentication. It must be a bare DID, without `#serviceId`. If it is a hostname-level `did:web` and the matching hostname points to this service, `GET /.well-known/did.json` now publishes a `#hypercerts_feed` service entry at that hostname for discovery.
 
-The `did#serviceId` format from AT Protocol Proposal 0014 is not supported yet because `@atproto/lex-server` does not support it.
+Node HTTP requests now retain working service authentication after their POST body finishes. The service upgrades `@atproto/lex-server` to 0.1.19 and avoids passing its prematurely aborted request signal to DID resolution. The `did#serviceId` format from AT Protocol Proposal 0014 is not supported yet because `@atproto/lex-server` does not support it.
