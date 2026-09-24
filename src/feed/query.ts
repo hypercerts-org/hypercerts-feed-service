@@ -73,7 +73,7 @@ const parseHypercertsFeedParams = (
 
   return {
     $type: HYPERCERTS_FEED_PARAMS_TYPE,
-    viewerDid: parsed.viewerDid,
+    ...(parsed.viewerDid === undefined ? {} : { viewerDid: parsed.viewerDid }),
     ...(parsed.trustedEvaluators === undefined
       ? {}
       : { trustedEvaluators: parsed.trustedEvaluators }),

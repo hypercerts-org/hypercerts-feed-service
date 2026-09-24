@@ -5,6 +5,7 @@ import type { Logger } from 'pino'
 
 import { registerGetFeedSkeleton } from './api/get-feed-skeleton.js'
 import { registerGetFeed } from './api/get-feed.js'
+import type { OptionalServiceAuth } from './auth/service-auth.js'
 import type { DatabaseCompatibilityChecker } from './database.js'
 import { FeedErrorCode } from './feed/errors.js'
 import type { FeedSkeletonReader } from './feed/service.js'
@@ -63,6 +64,7 @@ const routeLabel = (pathname: string): string => {
   if (pathname === '/') return 'root'
   if (pathname === '/health') return 'health'
   if (pathname === '/ready') return 'ready'
+  if (pathname === '/.well-known/did.json') return 'did_document'
   return feedRoute(pathname)?.label ?? 'other'
 }
 
@@ -93,12 +95,15 @@ const corsPreflightResponse = (request: Request): Response => {
   const unsupportedHeader = requestedHeaders
     ?.split(',')
     .map((value) => value.trim().toLowerCase())
-    .find((value) => value !== '' && value !== 'content-type')
+    .find(
+      (value) =>
+        value !== '' && value !== 'content-type' && value !== 'authorization',
+    )
   if (unsupportedHeader !== undefined) {
     return jsonResponse(
       {
         error: FeedErrorCode.InvalidRequest,
-        message: `This feed preflight requests unsupported header ${JSON.stringify(unsupportedHeader)}; retry with content-type only.`,
+        message: `This feed preflight requests unsupported header ${JSON.stringify(unsupportedHeader)}; retry with content-type and authorization only.`,
       },
       400,
     )
@@ -108,7 +113,7 @@ const corsPreflightResponse = (request: Request): Response => {
     status: 204,
     headers: {
       'access-control-allow-methods': 'POST',
-      'access-control-allow-headers': 'content-type',
+      'access-control-allow-headers': 'content-type, authorization',
       'access-control-max-age': '600',
     },
   })
@@ -145,11 +150,14 @@ const readBoundedRequest = async (
   }
   const headers = new Headers(request.headers)
   headers.set('content-length', String(size))
+  // lex-server/nodejs aborts request.signal when the incoming body ends, even
+  // on a successful upload (bluesky-social/atproto#5546). Do not pass that
+  // stale signal to DID resolution. After buffering, client disconnects no
+  // longer cancel auth/feed work; DID resolution and database timeouts remain.
   return new Request(request.url, {
     method: request.method,
     headers,
     body,
-    signal: request.signal,
   })
 }
 
@@ -245,6 +253,29 @@ const handleHealthRequest = (request: Request): Response =>
     ? jsonResponse({ status: 'ok' })
     : methodNotAllowed('GET')
 
+const handleDidDocumentRequest = (
+  request: Request,
+  serviceDid: string | undefined,
+): Response => {
+  const hostname = serviceDid?.match(/^did:web:([a-z0-9.-]+)$/)?.[1]
+  if (hostname === undefined) {
+    return new Response(null, { status: 404 })
+  }
+  if (request.method !== 'GET') return methodNotAllowed('GET')
+
+  return jsonResponse({
+    '@context': ['https://www.w3.org/ns/did/v1'],
+    id: serviceDid,
+    service: [
+      {
+        id: '#hypercerts_feed',
+        type: 'HypercertsFeedService',
+        serviceEndpoint: `https://${hostname}`,
+      },
+    ],
+  })
+}
+
 const handleReadyRequest = async (
   request: Request,
   database: DatabaseCompatibilityChecker,
@@ -300,6 +331,7 @@ const handleRequest = async (
   database: DatabaseCompatibilityChecker,
   router: LexRouter,
   metrics: Metrics,
+  serviceDid: string | undefined,
 ): Promise<Response> => {
   const matchedFeedRoute = feedRoute(pathname)
 
@@ -312,6 +344,8 @@ const handleRequest = async (
     response = handleHealthRequest(request)
   } else if (pathname === '/ready') {
     response = await handleReadyRequest(request, database, metrics)
+  } else if (pathname === '/.well-known/did.json') {
+    response = handleDidDocumentRequest(request, serviceDid)
   } else {
     response = await handleFeedRequest(request, matchedFeedRoute, router)
   }
@@ -331,6 +365,8 @@ export const createApp = (
   services: AppFeedServices,
   metrics: Metrics,
   logger: Logger,
+  auth?: OptionalServiceAuth,
+  serviceDid?: string,
 ): { fetch: FetchHandler } => {
   const router = new LexRouter({
     onHandlerError: ({ error, method }) => {
@@ -338,8 +374,8 @@ export const createApp = (
       logger.error({ err: error, nsid: method.nsid }, 'unexpected XRPC handler error')
     },
   })
-  registerGetFeedSkeleton(router, services.skeleton, logger)
-  registerGetFeed(router, services.hydrated, logger)
+  registerGetFeedSkeleton(router, services.skeleton, logger, auth)
+  registerGetFeed(router, services.hydrated, logger, auth)
 
   const fetch: FetchHandler = async (request) => {
     const startedAt = performance.now()
@@ -354,6 +390,7 @@ export const createApp = (
         database,
         router,
         metrics,
+        serviceDid,
       )
       status = response.status
       if (matchedFeedRoute !== undefined) {

@@ -103,6 +103,7 @@ describe('Hypercerts feed definition against Postgres', () => {
 
     const config = loadConfig({
       DATABASE_URL: TEST_DATABASE_URL,
+      SERVICE_DID: 'did:web:feed.example',
       DATABASE_MAX_CONNECTIONS: '3',
       DATABASE_STATEMENT_TIMEOUT_MS: '10000',
     })

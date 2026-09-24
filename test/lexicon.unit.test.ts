@@ -173,6 +173,7 @@ describe('feed Lexicon contract', () => {
       closed: false,
       refs: [paramsType],
     })
+    expect(defs.hypercertsFeedParams.required ?? []).not.toContain('viewerDid')
     expect(hydratedMain.input.schema.properties.limit).toMatchObject({
       type: 'integer',
       minimum: 1,
@@ -252,6 +253,12 @@ describe('feed Lexicon contract', () => {
             includeUnrated: false,
           },
         },
+      }),
+    ).not.toThrow()
+    expect(() =>
+      skeletonInput.schema.$parse({
+        feedId,
+        params: { $type: paramsType },
       }),
     ).not.toThrow()
     expect(() =>

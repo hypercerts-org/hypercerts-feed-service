@@ -24,6 +24,12 @@ export interface Config {
   readonly requestTimeoutMs: number
   /** Maximum time graceful shutdown waits for active requests. */
   readonly gracefulShutdownMs: number
+  /** DID of this service; required as the service-auth JWT audience. */
+  readonly serviceDid: string
+  /** Maximum accepted age of a service-auth JWT, in seconds. */
+  readonly serviceAuthMaxAgeSeconds: number
+  /** Maximum time allowed for one DID document resolution. */
+  readonly didResolutionTimeoutMs: number
   /** Orglabeler DIDs trusted to provide account-quality labels. */
   readonly trustedQualityLabelerDids: readonly string[]
   /** Pino logging threshold. */
@@ -93,6 +99,18 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     )
   }
 
+  const serviceDid = env.SERVICE_DID
+  if (!serviceDid) {
+    throw new Error(
+      'SERVICE_DID is required; set it to the valid DID identifying this service for service-auth JWT audience verification.',
+    )
+  }
+  if (!isValidDid(serviceDid)) {
+    throw new Error(
+      `SERVICE_DID ${JSON.stringify(serviceDid)} is not a valid DID; set it to the DID identifying this service.`,
+    )
+  }
+
   const trustedQualityLabelerDids = [
     ...new Set(
       (env.TRUSTED_QUALITY_LABELER_DIDS ?? '')
@@ -119,6 +137,21 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
   return {
     host: env.HOST || '0.0.0.0',
     port,
+    serviceDid,
+    serviceAuthMaxAgeSeconds: integerEnv(
+      env,
+      'SERVICE_AUTH_MAX_AGE_SECONDS',
+      300,
+      1,
+      3_600,
+    ),
+    didResolutionTimeoutMs: integerEnv(
+      env,
+      'DID_RESOLUTION_TIMEOUT_MS',
+      2_000,
+      100,
+      60_000,
+    ),
     metricsHost: env.METRICS_HOST || '0.0.0.0',
     metricsPort,
     databaseUrl,
