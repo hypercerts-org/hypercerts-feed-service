@@ -1,5 +1,11 @@
 # @hypercerts/hypercerts-feed-service
 
+## 1.0.0
+
+### Major Changes
+
+- [#32](https://github.com/hypercerts-org/hypercerts-feed-service/pull/32) [`4f91517`](https://github.com/hypercerts-org/hypercerts-feed-service/commit/4f915179597e61984212abb4151e57a2fb5817cd) Thanks [@Kzoeps](https://github.com/Kzoeps)! - Read feed records, labels, and Certified profiles directly from HappyView PostgreSQL. Feed timestamps use valid record `createdAt` with `indexed_at` fallback; organization quality uses HappyView's current positive label projection. Remove the Hyperboard kind and legacy handle/Bluesky identity fallbacks.
+
 ## 0.2.0
 
 ### Minor Changes
