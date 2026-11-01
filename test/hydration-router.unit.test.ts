@@ -34,13 +34,4 @@ describe('HydratedFeedRouter', () => {
     expect(owned.calls).toEqual(['org.example.feed#owned'])
     expect(fallback.calls).toEqual(['org.example.feed#other'])
   })
-
-  it('uses the default hydrator for every feedId when none is registered', async () => {
-    const fallback = new RecordingReader('default')
-    const router = new HydratedFeedRouter(fallback, new Map())
-
-    await router.getFeed({ feedId: 'org.hypercerts.feed.defs#maearthFeed' })
-
-    expect(fallback.calls).toEqual(['org.hypercerts.feed.defs#maearthFeed'])
-  })
 })

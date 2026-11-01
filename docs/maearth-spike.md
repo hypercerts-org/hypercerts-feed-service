@@ -27,23 +27,43 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
         "createdAt": "2026-10-14T12:00:00.123456Z",
         "repostedPostUri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.context.attachment/original"
       }
+    },
+    {
+      "subject": "at://did:plc:cccccccccccccccccccccccc/app.certified.graph.entityFollow/3jzfcijpj2ze",
+      "view": {
+        "$type": "org.hypercerts.feed.defs#maearthFeedView",
+        "kind": "projectFollow",
+        "createdAt": "2026-10-14T11:59:00.000000Z",
+        "followedProjectUri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.collection/project"
+      }
+    },
+    {
+      "subject": "at://did:plc:cccccccccccccccccccccccc/app.certified.graph.follow/3jzfcijpj2zf",
+      "view": {
+        "$type": "org.hypercerts.feed.defs#maearthFeedView",
+        "kind": "accountFollow",
+        "createdAt": "2026-10-14T11:58:00.000000Z",
+        "followedDid": "did:plc:dddddddddddddddddddddddd"
+      }
     }
   ]
 }
 ```
 
-`subject` identifies the repost record, not its target. `createdAt` is the **effective sort timestamp** (validated source `createdAt`, otherwise valid HappyView `indexed_at`), normalized to UTC with microseconds. It is not necessarily the literal source field. Repost targets are not fetched, and their existence is not required. MaEarth can drop invisible entries, but must keep advancing the returned cursor, even for an empty visible page.
+`subject` identifies the item's own record, not its target. `createdAt` is the **effective sort timestamp** (validated source `createdAt`, otherwise valid HappyView `indexed_at`), normalized to UTC with microseconds. It is not necessarily the literal source field. Repost targets are not fetched, and their existence is not required. MaEarth can drop invisible entries, but must keep advancing the returned cursor, even for an empty visible page.
+
+**Follow targets.** A `projectFollow` carries `followedProjectUri`, the followed `org.hypercerts.collection` URI that resolved to a `type` of `project`. An `accountFollow` carries `followedDid`, the DID in the follow record's subject. Each is absent for every other kind, and no kind carries a follower field: the follower is the authority of the item's `subject` URI. Both values come from the same statement and the same records already read to select the item, so they add no query or read. They are not cross-checked against the requester: a stranger's follow of a followed account names that followed account, and a followed account's follow names whomever it followed. The skeleton does not carry them. The fields are optional additions to the open view, so existing consumers are unaffected.
 
 ### Selection
 
 The full current graph is resolved in SQL without the previous 500-account cap or per-DID calls:
 
-| Kind            | Selection                                                                                                                                                       |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `post`          | Update attachments authored by a directly followed account, the viewer, or whose `subjects[].uri` matches a followed project (see below).                       |
-| `projectFollow` | Direct entity follows with a `app.certified.defs#recordSubject` URI that resolves to a project, authored by a followed account or targeting a followed project. |
-| `accountFollow` | Direct Certified follows, authored by a followed account or targeting a followed account.                                                                       |
-| `repost`        | Reposts by followed accounts targeting an attachment URI with a nonempty CID. Reposts of other collections are excluded.                                        |
+| Kind            | Selection                                                                                                                                                                                                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `post`          | Update attachments authored by a directly followed account, the viewer, or whose `subjects[].uri` matches a followed project (see below).                                                                                                                                                        |
+| `projectFollow` | Direct entity follows with a `app.certified.defs#recordSubject` URI that resolves to a project, authored by a followed account or targeting a followed project.                                                                                                                                  |
+| `accountFollow` | Direct Certified follows, authored by a followed account or targeting a followed account.                                                                                                                                                                                                        |
+| `repost`        | Reposts by followed accounts targeting a valid attachment URI with a nonempty CID. Reposts of other collections, and targets that are not valid AT-URIs (a record key of `.`, `..` or over 512 characters, or an authority DID over 2048 characters), are excluded rather than failing the page. |
 
 **Direct follows only.** `via` must be absent or JSON `null` on both `app.certified.graph.follow` and `app.certified.graph.entityFollow`, in the viewer's scope and in every returned follow item. A mediated follow (non-null `via`) neither widens the viewer's scope nor appears as an item. The same rule applies to account follows and entity follows.
 
@@ -53,7 +73,9 @@ The full current graph is resolved in SQL without the previous 500-account cap o
 
 The viewer's own graph edges can appear because their targets are followed. The viewer's own reposts are not implicitly included. Project identity matches the URI, not a CID.
 
-**Effective timestamp.** The validated source `createdAt`, otherwise valid `indexed_at`, normalized to UTC with microseconds and bounded to `0001-01-01T00:00:00Z` through `9999-12-31T23:59:59.999999Z`. A `createdAt` outside that range (for example `9999-12-31T23:59:59-01:00`, which is year 10000 in UTC, or `0001-01-01T00:00:00+05:00`, which is before year 1) falls back to `indexed_at` under the same guards; if `indexed_at` is also out of range or invalid, the row is excluded. The bound keeps every returned `createdAt` a valid atproto datetime and every cursor value round-trippable.
+**Effective timestamp.** The validated source `createdAt`, otherwise valid `indexed_at`, normalized to UTC with microseconds. Every returned value lies within `0001-01-01T00:00:00Z` through `9999-12-31T23:59:59.999999Z`. A `createdAt` that is unparseable or malformed, or that falls before year 1 in UTC (for example `0001-01-01T00:00:00+05:00`), falls back to a valid `indexed_at` from year 1 onward; if `indexed_at` is also before year 1 or invalid, the row is excluded. A `createdAt` that parses as a real timestamp beyond year 9999 in UTC (for example `9999-12-31T23:59:59-01:00`) does not fall back: it is future-dated and hidden (next paragraph). The year-1 floor and the future cutoff keep every returned `createdAt` a valid atproto datetime and every cursor value round-trippable.
+
+**Future-dated items are hidden.** A row whose effective timestamp is later than the database's statement time plus five minutes is dropped, whatever its kind, and whether it was author-driven or target-driven. The cutoff uses PostgreSQL's `statement_timestamp()` (one reading per statement) and a single named skew constant in `src/feed/maearth-query.sql`. Any `createdAt` that parses as a real future timestamp (2099, `9999-12-31T23:59:59Z`, or a value that lands beyond year 9999 after its offset) is excluded, **not** replaced by `indexed_at`; only an unparseable `createdAt`, or one before year 1, falls back, as above. An item whose only valid timestamp is a future `indexed_at` is also hidden. Hidden items are removed before the page limit is applied, so they never shorten a page or move the cursor. Because the cutoff moves with the clock, an item dated slightly in the future becomes visible once its time arrives, but only on a traversal that has not already paged past its position.
 
 One parameterized statement handles scope, selection and pagination for either endpoint. Sort order is effective timestamp descending, URI descending. MaEarth views require no profile query, source-body hydration, repost-target or post-subject reads, API calls, or backfilling of dropped items. The only records read beyond the selected ones are the followed-project `org.hypercerts.collection` records that resolve scope, in the same statement. Hypercerts selection and its existing view remain unchanged.
 
@@ -71,7 +93,8 @@ The planner decides the physical plan. This spike has **no `EXPLAIN (ANALYZE, BU
 
 ### Known limitations
 
-- **Far-future `createdAt` pins an item to the top.** Any in-range timestamp is accepted, including 2099 or `9999-12-31T23:59:59Z`, so such an item sorts first until it is removed. The bound prevents invalid datetimes and cursor failures but deliberately adds no future-skew policy (such as ignoring a `createdAt` later than `indexed_at` plus a tolerance). Target-driven rows widen the exposure: a follow record from any account that follows a followed account or project, or an update post from any account that references a followed project, can carry such a timestamp. (Any account can likewise place a post about any project into its followers' feeds; MaEarth's own visibility filtering is the control.) MaEarth merges by `createdAt`, so it would also float above its own gifts. Decide a skew policy before production; it would diverge from the Hypercerts feed's timestamp semantics.
+- **Author-controlled timestamps within the skew.** Far-future items can no longer pin themselves to the top, but an item may still claim any time up to five minutes ahead of the database clock, and a backdated `createdAt` sorts wherever its author says. MaEarth merges by `createdAt`, so such an item can briefly float above its own gifts. Target-driven rows keep this open to any account that follows a followed account or project, or posts about a followed project. (Any account can likewise place a post about any project into its followers' feeds; MaEarth's own visibility filtering is the control.) Only the database clock is read. The five-minute skew assumes it is reasonably accurate; a database clock running more than that behind its writers would hide valid items.
+- **The Hypercerts feed still has the far-future exposure.** `src/feed/feed-query.sql` accepts any valid in-range `createdAt`, including 2099, so a far-future item pins to the top of that feed until removed. This change does not touch it. Follow-up: decide whether the Hypercerts feed should adopt the same cutoff, which would change its public ordering semantics and its tests.
 - `actorDid` only narrows the viewer's Following scope; it cannot serve a public profile page for someone the viewer does not follow.
 
 ## Local Docker validation
@@ -118,7 +141,7 @@ curl -sS http://127.0.0.1:PORT/xrpc/org.hypercerts.feed.getFeed \
   -d '{"feedId":"org.hypercerts.feed.defs#maearthFeed","params":{"$type":"org.hypercerts.feed.defs#maearthFeedParams","viewerDid":"did:plc:cccccccccccccccccccccccc"},"limit":2}'
 ```
 
-The validator checks 18 real ingested source records (including a project-type collection, a favorites-type collection, an activity-only post, and entity follows of a favorites collection and of a never-stored collection), confirms each stored CID equals the validator-computed CID it sent, then executes installed API Lua endpoints `app.certified.graph.getFollows`, `app.certified.graph.getEntityFollows`, `org.hypercerts.context.getAttachment`, `org.hypercerts.context.listAttachments`, and `app.certified.feed.getReposts` against those same records. It also checks both feed endpoints, all four MaEarth kinds, matching skeleton/view cursors, pagination, actor/kind filters, and update/delete/unfollow effects across API and feed responses. It restores the demonstration records after mutation checks. The focused MaEarth PostgreSQL suite uses a session-local temporary table for malformed JSON/timestamps, fallback ordering, timestamp bounds, feed-scoped cursors, project resolution, mediated follows, and a 505-account graph; those SQL fixtures are not claimed as valid ingested records. The harness has not been re-run since the project-resolution fixtures were added; treat its updated expectations as unverified until it is.
+The validator checks 18 real ingested source records (including a project-type collection, a favorites-type collection, an activity-only post, and entity follows of a favorites collection and of a never-stored collection), confirms each stored CID equals the validator-computed CID it sent, then executes installed API Lua endpoints `app.certified.graph.getFollows`, `app.certified.graph.getEntityFollows`, `org.hypercerts.context.getAttachment`, `org.hypercerts.context.listAttachments`, and `app.certified.feed.getReposts` against those same records. It also checks both feed endpoints, all four MaEarth kinds, matching skeleton/view cursors, pagination, actor/kind filters, and update/delete/unfollow effects across API and feed responses. It restores the demonstration records after mutation checks. The focused MaEarth PostgreSQL suite uses a session-local temporary table for malformed JSON/timestamps, fallback ordering, timestamp bounds, feed-scoped cursors, project resolution, mediated follows, and a 505-account graph; those SQL fixtures are not claimed as valid ingested records. `validate.mjs` also asserts the follow targets on every ingested follow item and their absence on posts and reposts. The harness has not been re-run since the project-resolution fixtures or the follow-target assertions were added; treat its updated expectations as unverified until it is. Its fixtures use a past `createdAt`, so the future-dated cutoff does not affect it.
 
 The harness leaves its containers and evidence available for inspection. When explicitly choosing to discard the disposable data, `dc down` removes only that project; do not use global Docker cleanup commands. Keep `$SPIKE_DIR/stack.env` until teardown, and do not commit it.
 
@@ -136,11 +159,13 @@ The harness leaves its containers and evidence available for inspection. When ex
 
 Open questions for MaEarth and the feed owners:
 
-- **Follow items name no followed target.** `projectFollow` and `accountFollow` entries expose the follower through the `subject` URI but not the followed project URI or account DID, so MaEarth may need a per-item record lookup, which recreates the fan-out this feed is meant to remove. The SQL already reads the target. Decide whether to add an optional target field to `maearthFeedView` before the lexicon is frozen.
 - Whether the skeleton may also carry `createdAt`, instead of MaEarth calling `getFeed` for merge metadata. The spike answers by keeping the skeleton URI-only.
-- Whether a far-future `createdAt` needs a skew policy (see Known limitations above).
 - Whether `actorDid` must serve unrestricted profile pages.
 
-Resolved: MaEarth projects are `org.hypercerts.collection` records with `type` `'project'`; matching a followed project's collection URI or the activity URIs in its `items[]` is sufficient (see Selection).
+Resolved:
+
+- MaEarth projects are `org.hypercerts.collection` records with `type` `'project'`; matching a followed project's collection URI or the activity URIs in its `items[]` is sufficient (see Selection).
+- Follow items name their target through `followedProjectUri` and `followedDid`, so MaEarth needs no per-item record lookup (see Contract).
+- Far-future `createdAt` values are hidden by a five-minute skew cutoff (see Selection).
 
 Before production: agree on the public schema, confirm actual MaEarth record shapes, test a privacy-aware consumer and gift-merge pagination, confirm HappyView has all five lexicons installed, subscribed and backfilled, and measure SQL plans on production-shaped data (see Query shape and performance). The feed is read-only and does not own migrations or indexes.

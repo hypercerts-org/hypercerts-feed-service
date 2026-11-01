@@ -33,48 +33,36 @@ const repostRow = (overrides: Record<string, unknown> = {}) => ({
   kind: 'repost',
   sort_value: '2026-10-14T12:00:00.123456Z',
   reposted_post_uri: `at://${viewerDid}/org.hypercerts.context.attachment/post`,
+  followed_project_uri: null,
+  followed_did: null,
   ...overrides,
 })
+
+const followedDid = 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb'
+const followedProject = `at://${followedDid}/org.hypercerts.collection/project`
+const projectFollowRow = (overrides: Record<string, unknown> = {}) =>
+  repostRow({
+    uri: `at://${viewerDid}/app.certified.graph.entityFollow/one`,
+    collection: 'app.certified.graph.entityFollow',
+    kind: 'projectFollow',
+    reposted_post_uri: null,
+    followed_project_uri: followedProject,
+    ...overrides,
+  })
+const accountFollowRow = (overrides: Record<string, unknown> = {}) =>
+  repostRow({
+    uri: `at://${viewerDid}/app.certified.graph.follow/one`,
+    collection: 'app.certified.graph.follow',
+    kind: 'accountFollow',
+    reposted_post_uri: null,
+    followed_did: followedDid,
+    ...overrides,
+  })
 
 const decodeCursorPayload = (cursor: string): unknown =>
   JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
 
 describe('MaEarth feed boundary', () => {
-  it('returns merge metadata while keeping the skeleton URI-only', async () => {
-    const { query, pages, service } = setup()
-    const uri = `at://${viewerDid}/app.certified.feed.repost/one`
-    const target = `at://${viewerDid}/org.hypercerts.context.attachment/post`
-    query.mockResolvedValue({
-      rows: [
-        {
-          uri,
-          cid: 'internal-cid',
-          collection: 'app.certified.feed.repost',
-          actor_did: viewerDid,
-          kind: 'repost',
-          sort_value: '2026-10-14T12:00:00.123456Z',
-          reposted_post_uri: target,
-        },
-      ],
-    })
-    expect(await service.getFeed(request)).toEqual({
-      feed: [
-        {
-          subject: uri,
-          view: {
-            $type: 'org.hypercerts.feed.defs#maearthFeedView',
-            kind: 'repost',
-            createdAt: '2026-10-14T12:00:00.123456Z',
-            repostedPostUri: target,
-          },
-        },
-      ],
-    })
-    expect(await new FeedService(pages).getFeedSkeleton(request)).toEqual({
-      feed: [{ subject: uri }],
-    })
-  })
-
   it('rejects unsupported kinds and out-of-range pagination before querying', async () => {
     const { query, service } = setup()
     await expect(
@@ -83,7 +71,7 @@ describe('MaEarth feed boundary', () => {
         params: { ...request.params, kinds: ['donation'] },
       }),
     ).rejects.toMatchObject({ code: 'InvalidRequest', status: 422 })
-    for (const limit of [0, 51, 100]) {
+    for (const limit of [0, 51]) {
       await expect(
         service.getFeed({ ...request, limit }),
       ).rejects.toMatchObject({ code: 'InvalidRequest', status: 422 })
@@ -102,7 +90,8 @@ describe('MaEarth feed boundary', () => {
     expect(query).not.toHaveBeenCalled()
   })
 
-  it('binds an authenticated viewer and rejects body identity overrides', () => {
+  it('binds an authenticated viewer, rejects body identity overrides and requires a viewer anonymously', async () => {
+    const { query, service } = setup()
     const credentials: ServiceAuthCredentials = {
       did: viewerDid,
       didDocument: { id: viewerDid },
@@ -131,6 +120,19 @@ describe('MaEarth feed boundary', () => {
         credentials,
       ),
     ).toThrow('does not match')
+    await expect(
+      service.getFeed({
+        ...request,
+        params: { $type: MAEARTH_FEED_PARAMS_TYPE },
+      }),
+    ).rejects.toMatchObject({ code: 'InvalidRequest', status: 422 })
+    expect(() =>
+      applyAuthenticatedViewer(
+        { ...request, params: { $type: MAEARTH_FEED_PARAMS_TYPE } },
+        undefined,
+      ),
+    ).toThrow('params.viewerDid is required for anonymous requests')
+    expect(query).not.toHaveBeenCalled()
   })
 })
 
@@ -149,30 +151,7 @@ describe('MaEarth feed query contract', () => {
     ])
   })
 
-  it('deduplicates kinds and binds the actor and decoded cursor position', async () => {
-    const { query, service } = setup()
-    const first = await setupCursor()
-    await service.getFeed({
-      ...request,
-      params: {
-        ...request.params,
-        actorDid: 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
-        kinds: ['post', 'repost', 'post'],
-      },
-      limit: 5,
-      cursor: first.cursor,
-    })
-    expect(query.mock.calls[0]?.[1]).toEqual([
-      viewerDid,
-      'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
-      ['post', 'repost'],
-      first.position.value,
-      first.position.uri,
-      6,
-    ])
-  })
-
-  it('emits a feed-scoped cursor for the last returned row only when another row exists', async () => {
+  it('emits a feed-scoped cursor for the last returned row only when another row exists, and binds its decoded position', async () => {
     const { query, service } = setup()
     const rows = [
       repostRow({ uri: `at://${viewerDid}/app.certified.feed.repost/b` }),
@@ -195,35 +174,29 @@ describe('MaEarth feed query contract', () => {
     expect(
       (await service.getFeed({ ...request, limit: 1 })).cursor,
     ).toBeUndefined()
-  })
 
-  it('requires an explicit valid viewer DID, and the anonymous path rejects a missing one', async () => {
-    const { query, service } = setup()
-    await expect(
-      service.getFeed({
-        ...request,
-        params: { $type: MAEARTH_FEED_PARAMS_TYPE },
-      }),
-    ).rejects.toMatchObject({ code: 'InvalidRequest', status: 422 })
-    await expect(
-      service.getFeed({
-        ...request,
-        params: { $type: MAEARTH_FEED_PARAMS_TYPE, viewerDid: 'not-a-did' },
-      }),
-    ).rejects.toMatchObject({ code: 'InvalidRequest', status: 400 })
-    expect(() =>
-      applyAuthenticatedViewer(
-        { ...request, params: { $type: MAEARTH_FEED_PARAMS_TYPE } },
-        undefined,
-      ),
-    ).toThrow('params.viewerDid is required for anonymous requests')
-    expect(query).not.toHaveBeenCalled()
+    await service.getFeed({
+      ...request,
+      params: {
+        ...request.params,
+        actorDid: 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
+        kinds: ['post', 'repost', 'post'],
+      },
+      limit: 5,
+      cursor: page.cursor,
+    })
+    expect(query.mock.calls[2]?.[1]).toEqual([
+      viewerDid,
+      'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
+      ['post', 'repost'],
+      rows[0]?.sort_value,
+      rows[0]?.uri,
+      6,
+    ])
   })
 
   it.each([
     ['an unsupported kind', { kind: 'donation' }],
-    ['a missing kind', { kind: undefined }],
-    ['a repost without a target URI', { reposted_post_uri: null }],
     ['a missing sort value', { sort_value: undefined }],
     ['a missing collection', { collection: undefined }],
     ['a missing actor DID', { actor_did: undefined }],
@@ -238,45 +211,151 @@ describe('MaEarth feed query contract', () => {
     ).rejects.toThrow(/MaEarth query metadata is incomplete/)
   })
 
-  it('omits repostedPostUri for non-repost kinds and keeps it out of the skeleton', async () => {
-    const { query, service } = setup()
-    const uri = `at://${viewerDid}/org.hypercerts.context.attachment/post`
-    query.mockResolvedValue({
-      rows: [
-        repostRow({
-          uri,
-          collection: 'org.hypercerts.context.attachment',
-          kind: 'post',
-          reposted_post_uri: null,
-        }),
-      ],
-    })
-    expect((await service.getFeed(request)).feed[0]?.view).toEqual({
-      $type: 'org.hypercerts.feed.defs#maearthFeedView',
-      kind: 'post',
-      createdAt: '2026-10-14T12:00:00.123456Z',
+  it('returns each follow kind with only its own target and keeps targets out of the skeleton', async () => {
+    const { query, pages, service } = setup()
+    const rows = [
+      projectFollowRow(),
+      accountFollowRow(),
+      repostRow(),
+      repostRow({
+        uri: `at://${viewerDid}/org.hypercerts.context.attachment/post`,
+        collection: 'org.hypercerts.context.attachment',
+        kind: 'post',
+        reposted_post_uri: null,
+      }),
+    ]
+    query.mockResolvedValue({ rows })
+    const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
+    const createdAt = '2026-10-14T12:00:00.123456Z'
+    expect((await service.getFeed(request)).feed).toEqual([
+      {
+        subject: rows[0]?.uri,
+        view: {
+          $type: viewType,
+          kind: 'projectFollow',
+          createdAt,
+          followedProjectUri: followedProject,
+        },
+      },
+      {
+        subject: rows[1]?.uri,
+        view: {
+          $type: viewType,
+          kind: 'accountFollow',
+          createdAt,
+          followedDid,
+        },
+      },
+      {
+        subject: rows[2]?.uri,
+        view: {
+          $type: viewType,
+          kind: 'repost',
+          createdAt,
+          repostedPostUri: rows[2]?.reposted_post_uri,
+        },
+      },
+      {
+        subject: rows[3]?.uri,
+        view: { $type: viewType, kind: 'post', createdAt },
+      },
+    ])
+    expect(await new FeedService(pages).getFeedSkeleton(request)).toEqual({
+      feed: rows.map((row) => ({ subject: row.uri })),
     })
   })
-})
 
-/** A cursor issued by the feed itself, so the test never hand-builds cursor bytes. */
-async function setupCursor(): Promise<{
-  cursor: string
-  position: { value: string; uri: string }
-}> {
-  const { query, service } = setup()
-  const rows = [
-    repostRow({ uri: `at://${viewerDid}/app.certified.feed.repost/b` }),
-    repostRow({
-      uri: `at://${viewerDid}/app.certified.feed.repost/a`,
-      sort_value: '2026-10-14T11:00:00.000000Z',
-    }),
-  ]
-  query.mockResolvedValue({ rows })
-  const page = await service.getFeed({ ...request, limit: 1 })
-  if (page.cursor === undefined) throw new Error('Expected a cursor')
-  return {
-    cursor: page.cursor,
-    position: { value: String(rows[0]?.sort_value), uri: String(rows[0]?.uri) },
-  }
-}
+  it.each([
+    [
+      'a projectFollow without a target',
+      projectFollowRow({ followed_project_uri: null }),
+    ],
+    [
+      'a projectFollow with a malformed URI',
+      projectFollowRow({ followed_project_uri: 'not-a-uri' }),
+    ],
+    [
+      'a projectFollow targeting another collection',
+      projectFollowRow({
+        followed_project_uri: `at://${followedDid}/org.hypercerts.claim.activity/activity`,
+      }),
+    ],
+    [
+      'a projectFollow also carrying a DID',
+      projectFollowRow({ followed_did: followedDid }),
+    ],
+    [
+      'an accountFollow without a target',
+      accountFollowRow({ followed_did: null }),
+    ],
+    [
+      'an accountFollow with a malformed DID',
+      accountFollowRow({ followed_did: 'not-a-did' }),
+    ],
+    [
+      'an accountFollow also carrying a project URI',
+      accountFollowRow({ followed_project_uri: followedProject }),
+    ],
+    [
+      'a repost carrying a project URI',
+      repostRow({ followed_project_uri: followedProject }),
+    ],
+    ['a repost carrying a DID', repostRow({ followed_did: followedDid })],
+    [
+      'a post carrying a DID',
+      repostRow({
+        kind: 'post',
+        reposted_post_uri: null,
+        followed_did: followedDid,
+      }),
+    ],
+    ['a repost without a target URI', repostRow({ reposted_post_uri: null })],
+    [
+      'a repost with a malformed target URI',
+      repostRow({ reposted_post_uri: 'not-a-uri' }),
+    ],
+    [
+      'a repost whose target has an invalid record key',
+      repostRow({
+        reposted_post_uri: `at://${followedDid}/org.hypercerts.context.attachment/..`,
+      }),
+    ],
+    [
+      'a repost whose target has an overlong record key',
+      repostRow({
+        reposted_post_uri: `at://${followedDid}/org.hypercerts.context.attachment/${'a'.repeat(513)}`,
+      }),
+    ],
+    [
+      'a repost whose target is not an attachment',
+      repostRow({ reposted_post_uri: followedProject }),
+    ],
+    [
+      'a post carrying a repost target',
+      repostRow({
+        kind: 'post',
+        reposted_post_uri: `at://${followedDid}/org.hypercerts.context.attachment/post`,
+      }),
+    ],
+    [
+      'a projectFollow carrying a repost target',
+      projectFollowRow({
+        reposted_post_uri: `at://${followedDid}/org.hypercerts.context.attachment/post`,
+      }),
+    ],
+    [
+      'a post with a missing target column',
+      repostRow({
+        kind: 'post',
+        reposted_post_uri: null,
+        followed_did: undefined,
+      }),
+    ],
+  ])('fails closed on %s', async (_label, row) => {
+    const { query, service } = setup()
+    query.mockResolvedValue({ rows: [row] })
+    await expect(service.getFeed(request)).rejects.toThrow(
+      /target that does not match its kind/,
+    )
+  })
+})

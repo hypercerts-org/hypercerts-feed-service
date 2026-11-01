@@ -28,7 +28,7 @@
     "maearthFeedView": {
       "type": "object",
       "required": ["kind", "createdAt"],
-      "description": "Experimental merge metadata, not hydrated content. createdAt is the effective SQL sort timestamp, including indexed_at fallback. MaEarth must apply privacy and content filtering.",
+      "description": "Experimental merge metadata, not hydrated content. createdAt is the effective SQL sort timestamp, including indexed_at fallback; items dated more than five minutes after the database's statement time are not returned. MaEarth must apply privacy and content filtering.",
       "properties": {
         "kind": {
           "type": "string",
@@ -40,6 +40,16 @@
           "type": "string",
           "format": "at-uri",
           "description": "Original attachment URI. Present only for reposts; the target is not fetched."
+        },
+        "followedProjectUri": {
+          "type": "string",
+          "format": "at-uri",
+          "description": "The followed project's org.hypercerts.collection URI. Present only for projectFollow; the follower is the authority of the entry's subject URI."
+        },
+        "followedDid": {
+          "type": "string",
+          "format": "did",
+          "description": "The followed account's DID, from the follow record's subject. Present only for accountFollow; the follower is the authority of the entry's subject URI."
         }
       }
     },

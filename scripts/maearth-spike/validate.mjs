@@ -609,9 +609,31 @@ async function verify() {
       .repostedPostUri,
     original,
   )
+  const viewOf = (index) =>
+    hydrated.feed.find((item) => item.subject === uriOf(events[index])).view
+  for (const [index, followedDid] of [
+    [0, followed],
+    [6, other],
+    [7, followed],
+  ]) {
+    const view = viewOf(index)
+    assert.equal(view.kind, 'accountFollow')
+    assert.equal(view.followedDid, followedDid)
+    assert(!('followedProjectUri' in view))
+  }
+  for (const index of [1, 10]) {
+    const view = viewOf(index)
+    assert.equal(view.kind, 'projectFollow')
+    assert.equal(view.followedProjectUri, project)
+    assert(!('followedDid' in view))
+  }
+  for (const index of [2, 3, 4, 11, 15]) {
+    const view = viewOf(index)
+    assert(!('followedDid' in view) && !('followedProjectUri' in view))
+  }
   evidence.sample = hydrated
   check(
-    'Both HTTP endpoints: scope, all four kinds, microsecond sort time and URI-only skeleton',
+    'Both HTTP endpoints: scope, all four kinds, microsecond sort time, follow targets and URI-only skeleton',
   )
   check(
     'Project resolution through real ingestion: a project-type collection counts, an activity-only post matches through its items[], and favorites-type and never-stored collections are excluded',

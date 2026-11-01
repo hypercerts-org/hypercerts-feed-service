@@ -25,6 +25,10 @@ export interface MaearthFeedView {
   readonly kind: MaearthKind
   readonly createdAt: string
   readonly repostedPostUri?: string
+  /** The followed project's collection URI; present only for `projectFollow`. */
+  readonly followedProjectUri?: string
+  /** The followed account; present only for `accountFollow`. */
+  readonly followedDid?: string
 }
 
 export const isMaearthKind = (kind: string): kind is MaearthKind =>

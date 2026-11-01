@@ -9,8 +9,12 @@ patterns AS NOT MATERIALIZED (
     '^at://did:[a-z]+:[a-zA-Z0-9._:%-]*[a-zA-Z0-9._-]/org[.]hypercerts[.]context[.]attachment/[a-zA-Z0-9._~:-]+$'::text AS post_uri,
     -- The sort value is returned to clients and re-read as a cursor, so every
     -- effective timestamp must render as a valid four-digit-year atproto datetime.
+    -- This floor applies to createdAt and indexed_at; the cutoff below keeps the
+    -- top far under year 9999.
     timestamptz '0001-01-01 00:00:00+00' AS min_effective_at,
-    timestamptz '9999-12-31 23:59:59.999999+00' AS max_effective_at
+    -- Items dated later than the statement clock plus this skew are hidden, not
+    -- re-dated: one clock reading and one skew constant serve the whole statement.
+    statement_timestamp() + interval '5 minutes' AS latest_visible_at
 ),
 -- Decode only the viewer's own graph records (did-first); never cap the resolved scope.
 viewer_graph AS MATERIALIZED (
@@ -164,7 +168,13 @@ classified AS (
       WHEN 'app.certified.feed.repost' THEN 'repost'
     END AS kind,
     CASE WHEN event.collection = 'app.certified.feed.repost'
-      THEN event.value->'subject'->>'uri' END AS reposted_post_uri
+      THEN event.value->'subject'->>'uri' END AS reposted_post_uri,
+    -- Follow targets are the values the selection predicates below already
+    -- validated; each follow kind exposes only its own target.
+    CASE WHEN event.collection = 'app.certified.graph.entityFollow'
+      THEN event.value->'subject'->>'uri' END AS followed_project_uri,
+    CASE WHEN event.collection = 'app.certified.graph.follow'
+      THEN event.value->>'subject' END AS followed_did
   FROM candidates AS event
   CROSS JOIN patterns
   WHERE event.value->>'$type' = event.collection
@@ -209,6 +219,8 @@ classified AS (
         (event.value->'via' IS NULL OR event.value->'via' = 'null'::jsonb)
         AND jsonb_typeof(event.value->'subject') = 'string'
         AND event.value->>'subject' ~ patterns.did
+        -- followedDid is returned and output-validated; an overlong DID would fail the page.
+        AND length(event.value->>'subject') <= 2048
         AND (
           event.did IN (SELECT did FROM followed_accounts)
           OR event.value->>'subject' IN (SELECT did FROM followed_accounts)
@@ -217,6 +229,12 @@ classified AS (
         event.did IN (SELECT did FROM followed_accounts)
         AND jsonb_typeof(event.value->'subject'->'uri') = 'string'
         AND event.value->'subject'->>'uri' ~ patterns.post_uri
+        -- repostedPostUri is output-validated as an at-uri. The pattern fixes the
+        -- shape (so the whole URI stays under 8192 characters); this also bounds
+        -- the DID authority to 2048 and the record key to 512, neither '.' nor '..'.
+        AND length(split_part(event.value->'subject'->>'uri', '/', 3)) <= 2048
+        AND length(split_part(event.value->'subject'->>'uri', '/', 5)) <= 512
+        AND split_part(event.value->'subject'->>'uri', '/', 5) NOT IN ('.', '..')
         AND jsonb_typeof(event.value->'subject'->'cid') = 'string'
         AND event.value->'subject'->>'cid' <> ''
       ELSE false
@@ -224,7 +242,7 @@ classified AS (
 ),
 parsed AS (
   SELECT event.uri, event.cid, event.collection, event.actor_did, event.kind,
-    event.reposted_post_uri,
+    event.reposted_post_uri, event.followed_project_uri, event.followed_did,
     CASE WHEN event.created_at ~ patterns.rfc3339
       AND event.created_at !~ '-00:00$'
       AND pg_input_is_valid(event.created_at, 'timestamptz')
@@ -235,28 +253,33 @@ parsed AS (
       THEN event.indexed_at::timestamptz END AS indexed_ts
   FROM classified AS event CROSS JOIN patterns
 ),
--- An out-of-range createdAt falls back to indexed_at; when that is out of range
--- (or absent/invalid) the row is excluded. The range also rejects infinity.
+-- A createdAt that parses as a real timestamp (year 1 onward) is the item's
+-- time even beyond year 9999; `paged` then hides it as future-dated and never
+-- replaces it. Only an unparseable createdAt, or one before year 1, falls back
+-- to indexed_at; when that is before year 1 (or absent/invalid) the row is
+-- excluded.
 timed AS (
   SELECT event.uri, event.cid, event.collection, event.actor_did, event.kind,
-    event.reposted_post_uri,
+    event.reposted_post_uri, event.followed_project_uri, event.followed_did,
     COALESCE(
-      CASE WHEN event.created_ts BETWEEN patterns.min_effective_at AND patterns.max_effective_at
+      CASE WHEN event.created_ts >= patterns.min_effective_at
         THEN event.created_ts END,
-      CASE WHEN event.indexed_ts BETWEEN patterns.min_effective_at AND patterns.max_effective_at
+      CASE WHEN event.indexed_ts >= patterns.min_effective_at
         THEN event.indexed_ts END
     ) AS effective_at
   FROM parsed AS event CROSS JOIN patterns
 ),
 paged AS (
-  SELECT * FROM timed
+  SELECT timed.* FROM timed CROSS JOIN patterns
   WHERE effective_at IS NOT NULL
+    AND effective_at <= patterns.latest_visible_at
     AND (cardinality($3::text[]) = 0 OR kind = ANY($3::text[]))
     AND ($4::timestamptz IS NULL OR (effective_at, uri) < ($4::timestamptz, $5::text))
   ORDER BY effective_at DESC, uri DESC
   LIMIT $6::integer
 )
 SELECT uri, cid, collection, actor_did, kind, reposted_post_uri,
+  followed_project_uri, followed_did,
   to_char(effective_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_value
 FROM paged
 ORDER BY effective_at DESC, uri DESC

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 
-import { isValidDid } from '@atproto/syntax'
+import { isValidDid, parseAtUriString } from '@atproto/syntax'
 import type { QueryResultRow } from 'pg'
 
 import { timestampUriCursor } from './cursor.js'
@@ -12,6 +12,7 @@ import {
   isMaearthKind,
   type MaearthFeedParams,
   type MaearthFeedView,
+  type MaearthKind,
 } from './maearth-types.js'
 import type { FeedPageLoader, RegisteredFeed } from './registry.js'
 import { defineSqlFeed, type SqlFeedRuntime } from './sql-feed.js'
@@ -35,6 +36,66 @@ interface MaearthQueryRow extends QueryResultRow {
   readonly kind: string
   readonly sort_value: string
   readonly reposted_post_uri: string | null
+  readonly followed_project_uri: string | null
+  readonly followed_did: string | null
+}
+
+type RowTarget = Pick<
+  MaearthFeedView,
+  'repostedPostUri' | 'followedProjectUri' | 'followedDid'
+>
+
+const POST_COLLECTION = 'org.hypercerts.context.attachment'
+const PROJECT_COLLECTION = 'org.hypercerts.collection'
+
+/** A strictly valid record AT-URI, the same check the generated parser applies. */
+const isRecordUri = (value: unknown, collection: string): value is string => {
+  const parsed = parseAtUriString(value)
+  return (
+    parsed.success &&
+    parsed.value.collection === collection &&
+    parsed.value.rkey !== undefined &&
+    parsed.value.query === undefined &&
+    parsed.value.hash === undefined
+  )
+}
+
+/**
+ * Each kind carries exactly its own target and no other kind's: reposts the
+ * original post, project follows the project, account follows the DID, posts
+ * nothing. A violation is a SQL projection bug, so it fails the request
+ * instead of emitting a view the client cannot trust.
+ */
+const rowTarget = (
+  kind: MaearthKind,
+  { repost, project, did }: { repost: unknown; project: unknown; did: unknown },
+): RowTarget => {
+  if (
+    kind === 'repost' &&
+    isRecordUri(repost, POST_COLLECTION) &&
+    project === null &&
+    did === null
+  )
+    return { repostedPostUri: repost }
+  if (
+    kind === 'projectFollow' &&
+    repost === null &&
+    isRecordUri(project, PROJECT_COLLECTION) &&
+    did === null
+  )
+    return { followedProjectUri: project }
+  if (
+    kind === 'accountFollow' &&
+    repost === null &&
+    project === null &&
+    isValidDid(did)
+  )
+    return { followedDid: did }
+  if (kind === 'post' && repost === null && project === null && did === null)
+    return {}
+  throw new Error(
+    "MaEarth query row has a target that does not match its kind: repost needs a valid reposted_post_uri, projectFollow a valid followed_project_uri, accountFollow a valid followed_did, post none, and no kind may carry another kind's target; correct the SQL projection before serving requests.",
+  )
 }
 
 // Semantic parameter errors are 422, as for the Hypercerts feed; structurally
@@ -116,13 +177,17 @@ export const createMaearthFeed = (
         typeof row.collection !== 'string' ||
         typeof row.actor_did !== 'string' ||
         typeof row.sort_value !== 'string' ||
-        !isMaearthKind(row.kind) ||
-        (row.kind === 'repost' && typeof row.reposted_post_uri !== 'string')
+        !isMaearthKind(row.kind)
       ) {
         throw new Error(
           'MaEarth query metadata is incomplete or has an unsupported kind; correct the SQL projection before serving requests.',
         )
       }
+      const target = rowTarget(row.kind, {
+        repost: row.reposted_post_uri,
+        project: row.followed_project_uri,
+        did: row.followed_did,
+      })
       const metadata = {
         uri: row.uri,
         cid: row.cid,
@@ -136,9 +201,7 @@ export const createMaearthFeed = (
         $type: 'org.hypercerts.feed.defs#maearthFeedView',
         kind: row.kind,
         createdAt: row.sort_value,
-        ...(row.reposted_post_uri === null
-          ? {}
-          : { repostedPostUri: row.reposted_post_uri }),
+        ...target,
       }
       return { ...metadata, sourceValue: view }
     },
@@ -166,6 +229,12 @@ export class MaearthFeedService {
         ...(parsed.repostedPostUri === undefined
           ? {}
           : { repostedPostUri: parsed.repostedPostUri }),
+        ...(parsed.followedProjectUri === undefined
+          ? {}
+          : { followedProjectUri: parsed.followedProjectUri }),
+        ...(parsed.followedDid === undefined
+          ? {}
+          : { followedDid: parsed.followedDid }),
       }
       return { subject: row.uri, view }
     })

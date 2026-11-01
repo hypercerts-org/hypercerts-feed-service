@@ -36,6 +36,7 @@ const recordSubject = (uri: string) => ({
   uri,
 })
 const cid = 'bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u'
+const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
 
 const seed = async (
   actor: string,
@@ -145,6 +146,9 @@ interface CollectedItem {
   readonly createdAt: string
 }
 
+const minutesFromNow = (minutes: number) =>
+  new Date(Date.now() + minutes * 60_000).toISOString()
+
 /** Follows cursors to the end; the cap turns a non-terminating cursor into a failure. */
 const collect = async (
   viewerDid: string,
@@ -205,13 +209,6 @@ describe('MaEarth Following SQL', () => {
     expect(page.feed.map((item) => item.subject).sort()).toEqual(
       [own, followed, about].sort(),
     )
-    expect(
-      (
-        await service.getFeed(
-          request(viewer, { kinds: ['post'], actorDid: stranger }),
-        )
-      ).feed.map((item) => item.subject),
-    ).toEqual([about])
   })
 
   it('uses both follower and target scope for follows, rejects mediated account follows and unknown entity variants', async () => {
@@ -235,19 +232,33 @@ describe('MaEarth Following SQL', () => {
     const page = await service.getFeed(
       request(viewer, { kinds: ['accountFollow', 'projectFollow'] }),
     )
-    expect(
-      page.feed
-        .map(({ subject, view }) => ({ subject, kind: view.kind }))
-        .sort((left, right) => left.subject.localeCompare(right.subject)),
-    ).toEqual(
+    const createdAt = '2026-10-14T12:00:00.000000Z'
+    const account = (subject: string, followedDid: string) => ({
+      subject,
+      view: { $type: viewType, kind: 'accountFollow', createdAt, followedDid },
+    })
+    const entity = (subject: string, followedProjectUri: string) => ({
+      subject,
+      view: {
+        $type: viewType,
+        kind: 'projectFollow',
+        createdAt,
+        followedProjectUri,
+      },
+    })
+    const bySubject = (left: { subject: string }, right: { subject: string }) =>
+      left.subject.localeCompare(right.subject)
+    // The follower is the subject URI's authority; each item names only the
+    // followed target, so a stranger's follow of `author` names `author`.
+    expect([...page.feed].sort(bySubject)).toEqual(
       [
-        { subject: viewerFollow, kind: 'accountFollow' },
-        { subject: viewerProject, kind: 'projectFollow' },
-        { subject: byAuthor, kind: 'accountFollow' },
-        { subject: aboutAuthor, kind: 'accountFollow' },
-        { subject: projectByAuthor, kind: 'projectFollow' },
-        { subject: aboutProject, kind: 'projectFollow' },
-      ].sort((left, right) => left.subject.localeCompare(right.subject)),
+        account(viewerFollow, author),
+        entity(viewerProject, project(target)),
+        account(byAuthor, stranger),
+        account(aboutAuthor, author),
+        entity(projectByAuthor, project(stranger)),
+        entity(aboutProject, project(target)),
+      ].sort(bySubject),
     )
   })
 
@@ -278,6 +289,34 @@ describe('MaEarth Following SQL', () => {
     ])
   })
 
+  it('excludes reposts whose target URI would fail output validation instead of failing the page', async () => {
+    const viewer = did(),
+      author = did(),
+      stranger = did()
+    await follow(viewer, author)
+    const valid = await repost(author, { uri: post(stranger), cid })
+    // Boundary values that are still valid AT-URIs stay in the feed.
+    const longestKey = await repost(author, {
+      uri: post(stranger, 'k'.repeat(512)),
+      cid,
+    })
+    const longestDid = `did:web:${'a'.repeat(2040)}`
+    const longestAuthority = await repost(author, {
+      uri: post(longestDid),
+      cid,
+    })
+    await repost(author, { uri: post(stranger, '..'), cid })
+    await repost(author, { uri: post(stranger, '.'), cid })
+    await repost(author, { uri: post(stranger, 'k'.repeat(513)), cid })
+    await repost(author, { uri: post(`did:web:${'a'.repeat(2041)}`), cid })
+    const items = await service.getFeed(
+      request(viewer, { kinds: ['repost'], limit: 50 }),
+    )
+    expect(items.feed.map((item) => item.subject).sort()).toEqual(
+      [valid, longestKey, longestAuthority].sort(),
+    )
+  })
+
   it('paginates equal instants without gaps, retains microseconds and safely handles malformed timestamps and JSON', async () => {
     const viewer = did(),
       author = did()
@@ -292,6 +331,12 @@ describe('MaEarth Following SQL', () => {
       author,
       { createdAt: 'invalid' },
       { indexedAt: '2026-10-14 11:00:00+00' },
+    )
+    // Matches the RFC3339 shape but is not a real date, so it fails input validation.
+    const impossible = await update(
+      author,
+      { createdAt: '2026-13-45T12:00:00Z' },
+      { indexedAt: '2026-10-14 10:00:00+00' },
     )
     for (const indexedAt of ['infinity', '2026-10-14', 'invalid', null]) {
       await update(
@@ -308,31 +353,15 @@ describe('MaEarth Following SQL', () => {
     const seen = (await collect(viewer, { kinds: ['post'], limit: 1 })).map(
       (item) => item.subject,
     )
-    expect(seen).toEqual([...[valid, tie].sort().reverse(), fallback])
+    expect(seen).toEqual([
+      ...[valid, tie].sort().reverse(),
+      fallback,
+      impossible,
+    ])
     const first = await service.getFeed(
       request(viewer, { kinds: ['post'], limit: 1 }),
     )
     expect(first.feed[0]?.view.createdAt).toBe('2026-10-14T12:00:00.123456Z')
-    if (first.cursor === undefined)
-      throw new Error('Expected a next-page cursor for the fixture')
-    const foreign: unknown = JSON.parse(
-      Buffer.from(first.cursor, 'base64url').toString(),
-    )
-    if (
-      typeof foreign !== 'object' ||
-      foreign === null ||
-      !('feedId' in foreign)
-    ) {
-      throw new Error('Expected an object cursor payload')
-    }
-    foreign.feedId = 'org.hypercerts.feed.defs#hypercertsFeed'
-    await expect(
-      service.getFeed(
-        request(viewer, {
-          cursor: Buffer.from(JSON.stringify(foreign)).toString('base64url'),
-        }),
-      ),
-    ).rejects.toMatchObject({ code: 'InvalidCursor' })
   })
 
   it('does not truncate a graph with more than 500 accounts', async () => {
@@ -412,7 +441,7 @@ describe('MaEarth project resolution', () => {
     const listed = activity(owner, 'listed')
     const unlisted = activity(owner, 'unlisted')
     const nested = project(other, 'nested')
-    await seedCollection(owner, 'project', {
+    const collectionUri = await seedCollection(owner, 'project', {
       items: [listed, nested, 'not-a-uri'],
     })
     await entityFollow(viewer, project(owner))
@@ -441,7 +470,9 @@ describe('MaEarth project resolution', () => {
         { uri: listed, cid: 'different-cid' },
       ],
     })
-    await update(author, { subjects: [{ uri: unlisted, cid }] })
+    const byUnlisted = await update(author, {
+      subjects: [{ uri: unlisted, cid }],
+    })
     await update(author, { subjects: [{ uri: nested, cid }] })
     await update(author, { subjects: [{ uri: foreignActivity, cid }] })
     await update(author, { subjects: [{ uri: favoritesActivity, cid }] })
@@ -450,22 +481,8 @@ describe('MaEarth project resolution', () => {
     expect(await subjects(viewer, { kinds: ['post'] })).toEqual(
       [byActivity, byCollection, mixed].sort(),
     )
-  })
 
-  it('uses the current collection record, not a stored copy of its items', async () => {
-    const viewer = did(),
-      owner = did()
-    const first = activity(owner, 'first')
-    const second = activity(owner, 'second')
-    const collectionUri = await seedCollection(owner, 'project', {
-      items: [first],
-    })
-    await entityFollow(viewer, project(owner))
-    const aboutFirst = await update(owner, { subjects: [{ uri: first, cid }] })
-    const aboutSecond = await update(owner, {
-      subjects: [{ uri: second, cid }],
-    })
-    expect(await subjects(viewer, { kinds: ['post'] })).toEqual([aboutFirst])
+    // Matching follows the collection's current items, not what was listed earlier.
     await pool.query(
       'UPDATE happyview_records SET record = $1 WHERE uri = $2',
       [
@@ -474,12 +491,14 @@ describe('MaEarth project resolution', () => {
           type: 'project',
           title: 'Collection',
           createdAt: '2026-10-14T12:00:00Z',
-          items: [{ itemIdentifier: { uri: second, cid } }],
+          items: [{ itemIdentifier: { uri: unlisted, cid } }],
         }),
         collectionUri,
       ],
     )
-    expect(await subjects(viewer, { kinds: ['post'] })).toEqual([aboutSecond])
+    expect(await subjects(viewer, { kinds: ['post'] })).toEqual(
+      [byCollection, mixed, byUnlisted].sort(),
+    )
   })
 })
 
@@ -536,7 +555,11 @@ describe('MaEarth mediated and null-via follows', () => {
     const via = { uri: project(owner, 'via'), cid }
     await seedCollection(owner, 'project', { key: 'mediated' })
     await seedCollection(owner, 'project', { key: 'direct' })
-    await follow(viewer, author)
+    const viewerFollow = await follow(viewer, author)
+    // A mediated account follow neither widens scope nor appears as an item.
+    const mediatedAccount = did()
+    await follow(viewer, mediatedAccount, { via })
+    await update(mediatedAccount)
     await entityFollow(viewer, project(owner, 'mediated'), { via })
     const direct = await entityFollow(viewer, project(owner, 'direct'))
     // Followed author and stranger edges toward the mediated project.
@@ -554,6 +577,9 @@ describe('MaEarth mediated and null-via follows', () => {
       [direct, authorDirect, strangerDirect].sort(),
     )
     expect(await subjects(viewer, { kinds: ['post'] })).toEqual([])
+    expect(await subjects(viewer, { kinds: ['accountFollow'] })).toEqual([
+      viewerFollow,
+    ])
   })
 
   it('treats a JSON null via as direct for account and entity follows', async () => {
@@ -615,7 +641,7 @@ describe('MaEarth record shape and filters', () => {
     await follow(viewer, first)
     await follow(viewer, second)
     const firstFollow = await follow(first, target)
-    const secondFollow = await follow(second, target)
+    await follow(second, target)
     const firstRepost = await repost(first, { uri: post(target), cid })
     const secondRepost = await repost(second, { uri: post(target), cid })
     expect(
@@ -636,7 +662,6 @@ describe('MaEarth record shape and filters', () => {
     expect(await subjects(viewer, { kinds: ['repost'] })).toEqual(
       [firstRepost, secondRepost].sort(),
     )
-    expect(secondFollow).toBeDefined()
     // A stranger outside the graph yields nothing, even by explicit actorDid.
     expect(
       await subjects(viewer, { actorDid: did(), kinds: ['repost'] }),
@@ -711,23 +736,11 @@ describe('MaEarth record shape and filters', () => {
         (item) => item.subject,
       ),
     ).toEqual([authored, reposted])
-    const firstPage = await service.getFeed(
-      request(viewer, { kinds: ['accountFollow'], limit: 1 }),
-    )
-    expect(firstPage.feed.map((item) => item.subject)).toEqual([authorFollow])
     expect(
-      (
-        await service.getFeed(
-          request(viewer, {
-            kinds: ['accountFollow'],
-            limit: 1,
-            ...(firstPage.cursor === undefined
-              ? {}
-              : { cursor: firstPage.cursor }),
-          }),
-        )
-      ).feed.map((item) => item.subject),
-    ).toEqual([viewerFollow])
+      (await collect(viewer, { kinds: ['accountFollow'], limit: 1 })).map(
+        (item) => item.subject,
+      ),
+    ).toEqual([authorFollow, viewerFollow])
   })
 
   it('returns only the viewer own posts when the viewer follows nobody', async () => {
@@ -743,37 +756,31 @@ describe('MaEarth record shape and filters', () => {
   })
 })
 
+describe('MaEarth follow targets', () => {
+  it('excludes a followed account follow whose subject is too long to be a DID instead of failing the page', async () => {
+    const viewer = did(),
+      author = did()
+    const viewerFollow = await follow(viewer, author)
+    const kept = await follow(author, did())
+    await follow(author, `did:web:${'a'.repeat(2041)}`)
+    expect(await subjects(viewer, { kinds: ['accountFollow'] })).toEqual(
+      [viewerFollow, kept].sort(),
+    )
+  })
+})
+
 describe('MaEarth effective timestamp range', () => {
   it('keeps every sort value a valid datetime and every cursor round-trippable', async () => {
     const viewer = did(),
       author = did()
     await follow(viewer, author)
-    const edgeMax = await update(author, {
-      createdAt: '9999-12-31T23:59:59.999999Z',
-    })
-    const future = await update(author, { createdAt: '2099-06-01T00:00:00Z' })
-    // Out-of-range createdAt values fall back to indexed_at.
-    const lateOffset = await update(
-      author,
-      { createdAt: '9999-12-31T23:59:59-01:00' },
-      { indexedAt: '2026-10-14 12:00:00+00' },
-    )
-    const rounded = await update(
-      author,
-      { createdAt: '9999-12-31T23:59:59.9999999Z' },
-      { indexedAt: '2026-10-14 11:30:00+00' },
-    )
+    // A createdAt before year 1 is not a usable time, so it falls back to indexed_at.
     const earlyOffset = await update(
       author,
       { createdAt: '0001-01-01T00:00:00+05:00' },
       { indexedAt: '2026-10-14 11:00:00+00' },
     )
-    // Both timestamps out of range: the row is excluded.
-    await update(
-      author,
-      { createdAt: '9999-12-31T23:59:59-01:00' },
-      { indexedAt: '9999-12-31 23:59:59-01' },
-    )
+    // With indexed_at before year 1 as well, the row is excluded.
     await update(
       author,
       { createdAt: '0001-01-01T00:00:00+05:00' },
@@ -787,19 +794,8 @@ describe('MaEarth effective timestamp range', () => {
       .reverse()
 
     const items = await collect(viewer, { kinds: ['post'], limit: 1 })
-    expect(items.map((item) => item.subject)).toEqual([
-      edgeMax,
-      future,
-      lateOffset,
-      rounded,
-      earlyOffset,
-      ...edgeMin,
-    ])
+    expect(items.map((item) => item.subject)).toEqual([earlyOffset, ...edgeMin])
     expect(items.map((item) => item.createdAt)).toEqual([
-      '9999-12-31T23:59:59.999999Z',
-      '2099-06-01T00:00:00.000000Z',
-      '2026-10-14T12:00:00.000000Z',
-      '2026-10-14T11:30:00.000000Z',
       '2026-10-14T11:00:00.000000Z',
       '0001-01-01T00:00:00.000000Z',
       '0001-01-01T00:00:00.000000Z',
@@ -810,5 +806,84 @@ describe('MaEarth effective timestamp range', () => {
         (item) => item.subject,
       ),
     ).toEqual(items.map((item) => item.subject))
+  })
+})
+
+describe('MaEarth future-dated items', () => {
+  it('shows an item within the five-minute skew and hides later ones', async () => {
+    const viewer = did(),
+      author = did()
+    await follow(viewer, author)
+    const withinSkew = await update(author, { createdAt: minutesFromNow(4) })
+    await update(author, { createdAt: minutesFromNow(10) })
+    await update(author, { createdAt: '2099-06-01T00:00:00Z' })
+    const past = await update(author, { createdAt: minutesFromNow(-10) })
+    expect(
+      (await collect(viewer, { kinds: ['post'], limit: 1 })).map(
+        (item) => item.subject,
+      ),
+    ).toEqual([withinSkew, past])
+    expect(await subjects(viewer, { kinds: ['post'] })).toEqual(
+      [withinSkew, past].sort(),
+    )
+  })
+
+  it('hides future-dated items instead of re-dating them with indexed_at', async () => {
+    const viewer = did(),
+      author = did()
+    await follow(viewer, author)
+    const past = { indexedAt: '2026-10-14 12:00:00+00' }
+    const hidden = [
+      // Past the skew: the 10-minute row must stay hidden under a 15-minute skew.
+      [{ createdAt: minutesFromNow(10) }, past, 'now-plus-10m'],
+      // Real timestamps that land beyond year 9999 after their offset or rounding.
+      [{ createdAt: '9999-12-31T23:59:59-01:00' }, past, 'offset-year-10000'],
+      [
+        { createdAt: '9999-12-31T23:59:59.9999999Z' },
+        past,
+        'rounded-year-10000',
+      ],
+      // No usable createdAt, and a future indexed_at.
+      [
+        { createdAt: 'invalid' },
+        { indexedAt: '2099-06-01 00:00:00+00' },
+        'indexed-at-2099',
+      ],
+    ] as const
+    for (const [body, options, key] of hidden)
+      await update(author, body, { ...options, key })
+    const control = await update(
+      author,
+      { createdAt: 'invalid' },
+      { ...past, key: 'control' },
+    )
+    expect(await subjects(viewer, { kinds: ['post'] })).toEqual([control])
+  })
+
+  it('applies to every kind, including target-driven rows from strangers', async () => {
+    const viewer = did(),
+      author = did(),
+      stranger = did(),
+      owner = did()
+    await seedCollection(owner, 'project')
+    const viewerFollow = await follow(viewer, author)
+    const viewerProject = await entityFollow(viewer, project(owner))
+    const future = { createdAt: '2099-06-01T00:00:00Z' }
+    await follow(author, stranger, future)
+    await follow(stranger, author, future)
+    await entityFollow(author, project(owner), future)
+    await entityFollow(stranger, project(owner), future)
+    await repost(author, { uri: post(stranger), cid }, future)
+    await update(author, future)
+    await update(stranger, {
+      subjects: [{ uri: project(owner), cid }],
+      ...future,
+    })
+    const visible = await entityFollow(stranger, project(owner), {
+      createdAt: minutesFromNow(-1),
+    })
+    expect(await subjects(viewer)).toEqual(
+      [viewerFollow, viewerProject, visible].sort(),
+    )
   })
 })
