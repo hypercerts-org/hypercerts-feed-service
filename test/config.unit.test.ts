@@ -24,6 +24,27 @@ describe('loadConfig', () => {
     expect(config.trustedQualityLabelerDids).toEqual([
       'did:plc:ar7c4by46qjdydhdevvrndac',
     ])
+    expect(config.maearthFeedEnabled).toBe(false)
+  })
+
+  it('enables the experimental MaEarth feed only for an explicit true', () => {
+    expect(
+      loadConfig({ ...validEnvironment, MAEARTH_FEED_ENABLED: 'true' })
+        .maearthFeedEnabled,
+    ).toBe(true)
+    for (const disabled of ['false', '']) {
+      expect(
+        loadConfig({ ...validEnvironment, MAEARTH_FEED_ENABLED: disabled })
+          .maearthFeedEnabled,
+      ).toBe(false)
+    }
+    for (const invalid of ['1', 'yes', 'TRUE', 'on']) {
+      expect(() =>
+        loadConfig({ ...validEnvironment, MAEARTH_FEED_ENABLED: invalid }),
+      ).toThrow(
+        `MAEARTH_FEED_ENABLED must be "true" or "false"; change MAEARTH_FEED_ENABLED from "${invalid}" to true or false`,
+      )
+    }
   })
 
   it('loads configured metrics listener settings', () => {

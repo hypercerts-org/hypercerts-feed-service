@@ -4,6 +4,10 @@ A standalone, read-only TypeScript service. It reads current HappyView PostgreSQ
 
 HappyView owns the PostgreSQL tables. The service provides a URI-only skeleton and a hydrated feed with generic entries and feed-specific views. It does not ingest or change indexed data, call HappyView APIs, write records, fetch blob bytes, or provide an unchangeable event history. Feed authentication is optional AT Protocol service authentication; it never trusts a body viewer over the verified issuer.
 
+## Experimental MaEarth feed
+
+When `MAEARTH_FEED_ENABLED=true`, the service also registers `org.hypercerts.feed.defs#maearthFeed` for MaEarth's Following tab. It is off by default; without the flag a well-formed request for the feedId returns `UnsupportedFeed`. It returns posts, project/account follows and reposts. `getFeed` supplies merge metadata (kind, effective sort timestamp, repost target); MaEarth still owns hydration, privacy and gift merging. Skeleton items remain URI-only. See [the spike contract, limitations and isolated Docker walkthrough](docs/maearth-spike.md). The Hypercerts-specific examples and selection rules below are unchanged.
+
 ## Endpoints
 
 `GET /` returns a small JSON description of the service and lists its public XRPC procedures. It does not query the database or report service readiness. For a hostname-level `did:web` configured as `SERVICE_DID`, `GET /.well-known/did.json` publishes a DID document with a `#hypercerts_feed` service entry (`HypercertsFeedService`) pointing to the HTTPS origin derived from that DID. The route uses the configured DID, not the request hostname. Non-`did:web` service DIDs do not publish a document here.
@@ -40,7 +44,7 @@ curl -sS http://localhost:3000/xrpc/org.hypercerts.feed.getFeed \
   }'
 ```
 
-Use the same body with `getFeedSkeleton` when another data system needs only ordered source AT-URIs. A service caller may add `-H 'authorization: Bearer <service-auth-jwt>'` and omit `viewerDid`; the token must target the bare DID configured as `SERVICE_DID`, carry the exact endpoint NSID in `lxm`, and be signed by the issuer's `#atproto` key. Invalid supplied authorization returns 401 and is never treated as anonymous. The public params union is open for future feed algorithms, including algorithms that accept no params. This service currently registers only `org.hypercerts.feed.defs#hypercertsFeed` and requires `org.hypercerts.feed.defs#hypercertsFeedParams`; missing params or a mismatched `$type` returns `InvalidRequest`, while an unknown `feedId` returns `UnsupportedFeed`.
+Use the same body with `getFeedSkeleton` when another data system needs only ordered source AT-URIs. A service caller may add `-H 'authorization: Bearer <service-auth-jwt>'` and omit `viewerDid`; the token must target the bare DID configured as `SERVICE_DID`, carry the exact endpoint NSID in `lxm`, and be signed by the issuer's `#atproto` key. Invalid supplied authorization returns 401 and is never treated as anonymous. The public params union is open for future feed algorithms, including algorithms that accept no params. The Hypercerts feed requires `org.hypercerts.feed.defs#hypercertsFeedParams`; the experimental MaEarth feed, when enabled, requires `org.hypercerts.feed.defs#maearthFeedParams`; missing params or a mismatched `$type` returns `InvalidRequest`, while an unknown `feedId` returns `UnsupportedFeed`.
 
 ### Skeleton response
 
@@ -184,7 +188,7 @@ The order is:
 feed timestamp DESC, record URI DESC
 ```
 
-Entries appear newest first using an internal feed timestamp. HappyView stores record JSON and `indexed_at` as TEXT; the query validates JSON and timestamp text before casting, falls back from an invalid or absent `createdAt` to a finite, complete `indexed_at` in RFC3339 or legacy PostgreSQL format, and compares timestamps chronologically rather than lexically. Date-only and nonfinite fallback values are rejected. HappyView's `created_at` is row-ingestion time and is not used for feed ordering. Invalid source JSON does not abort selection; hydration drops an invalid selected source without backfilling. The effective timestamp is not exposed in either response. Pagination moves forward from the last source row chosen before hydration, so removing an invalid hydrated entry does not move the cursor.
+Entries appear newest first using an internal feed timestamp. HappyView stores record JSON and `indexed_at` as TEXT; the query validates JSON and timestamp text before casting, falls back from an invalid or absent `createdAt` to a finite, complete `indexed_at` in RFC3339 or legacy PostgreSQL format, and compares timestamps chronologically rather than lexically. Date-only and nonfinite fallback values are rejected. HappyView's `created_at` is row-ingestion time and is not used for feed ordering. Invalid source JSON does not abort selection; hydration drops an invalid selected source without backfilling. The Hypercerts feed does not expose its effective timestamp in either response; the experimental MaEarth feed returns its effective sort timestamp as `createdAt` in its `getFeed` view only, bounded to years 0001 through 9999 UTC. Pagination moves forward from the last source row chosen before hydration, so removing an invalid hydrated entry does not move the cursor.
 
 ### Pagination and database reads
 
@@ -235,6 +239,7 @@ For local development, copy `.env.example` to `.env`. For deployment, copy its v
 | `REQUEST_TIMEOUT_MS`             |       no |   `10000` | Maximum time allowed to receive an HTTP request; not a handler or database deadline    |
 | `GRACEFUL_SHUTDOWN_MS`           |       no |   `10000` | Shutdown drain timeout                                                                 |
 | `TRUSTED_QUALITY_LABELER_DIDS`   |       no |     empty | Comma-separated labeler DIDs trusted for current HappyView quality-label rows          |
+| `MAEARTH_FEED_ENABLED`           |       no |   `false` | `true` registers the experimental MaEarth feed; unset or `false` leaves it off         |
 
 For example, set `SERVICE_DID=did:web:dev.feed.hypercerts.dev` only when `https://dev.feed.hypercerts.dev` routes to this service; clients can discover its XRPC endpoint using `did:web:dev.feed.hypercerts.dev#hypercerts_feed`. This service does not publish a signing key: it verifies callers using their own DID documents. The DID service entry is for discovery and does not change JWT audience validation.
 

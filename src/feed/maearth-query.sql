@@ -1,0 +1,262 @@
+WITH
+patterns AS NOT MATERIALIZED (
+  SELECT
+    '^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$'::text AS rfc3339,
+    '^[0-9]{4}-[0-9]{2}-[0-9]{2} ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]+)?[+-]([01][0-9]|2[0-3])(:[0-5][0-9](:[0-5][0-9])?)?$'::text AS legacy,
+    '^did:[a-z]+:[a-zA-Z0-9._:%-]*[a-zA-Z0-9._-]$'::text AS did,
+    '^at://did:[a-z]+:[a-zA-Z0-9._:%-]*[a-zA-Z0-9._-]/org[.]hypercerts[.]collection/[a-zA-Z0-9._~:-]+$'::text AS project_uri,
+    '^at://did:[a-z]+:[a-zA-Z0-9._:%-]*[a-zA-Z0-9._-]/org[.]hypercerts[.]claim[.]activity/[a-zA-Z0-9._~:-]+$'::text AS activity_uri,
+    '^at://did:[a-z]+:[a-zA-Z0-9._:%-]*[a-zA-Z0-9._-]/org[.]hypercerts[.]context[.]attachment/[a-zA-Z0-9._~:-]+$'::text AS post_uri,
+    -- The sort value is returned to clients and re-read as a cursor, so every
+    -- effective timestamp must render as a valid four-digit-year atproto datetime.
+    timestamptz '0001-01-01 00:00:00+00' AS min_effective_at,
+    timestamptz '9999-12-31 23:59:59.999999+00' AS max_effective_at
+),
+-- Decode only the viewer's own graph records (did-first); never cap the resolved scope.
+viewer_graph AS MATERIALIZED (
+  SELECT source.collection, decoded.value
+  FROM happyview_records AS source
+  CROSS JOIN LATERAL (
+    SELECT CASE WHEN pg_input_is_valid(source.record, 'jsonb')
+      THEN source.record::jsonb ELSE NULL::jsonb END AS value
+    OFFSET 0
+  ) AS decoded
+  WHERE source.did = $1
+    AND source.collection IN ('app.certified.graph.follow', 'app.certified.graph.entityFollow')
+    AND decoded.value->>'$type' = source.collection
+),
+followed_accounts AS MATERIALIZED (
+  SELECT DISTINCT value->>'subject' AS did
+  FROM viewer_graph CROSS JOIN patterns
+  WHERE collection = 'app.certified.graph.follow'
+    AND (value->'via' IS NULL OR value->'via' = 'null'::jsonb)
+    AND jsonb_typeof(value->'subject') = 'string'
+    AND length(value->>'subject') <= 2048
+    AND value->>'subject' ~ patterns.did
+),
+-- Direct entity follows only: a mediated follow (non-null via) does not widen scope.
+followed_project_candidates AS MATERIALIZED (
+  SELECT DISTINCT value->'subject'->>'uri' AS uri
+  FROM viewer_graph CROSS JOIN patterns
+  WHERE collection = 'app.certified.graph.entityFollow'
+    AND (value->'via' IS NULL OR value->'via' = 'null'::jsonb)
+    AND value->'subject'->>'$type' = 'app.certified.defs#recordSubject'
+    AND jsonb_typeof(value->'subject'->'uri') = 'string'
+    AND length(value->'subject'->>'uri') <= 8192
+    AND value->'subject'->>'uri' ~ patterns.project_uri
+),
+-- A project is a current org.hypercerts.collection record whose JSON type is
+-- 'project'. Missing, unparseable and other-typed (favorites, portfolio,
+-- program, ...) records are not projects. Primary-key lookups by URI only.
+followed_projects AS MATERIALIZED (
+  SELECT candidate.uri, project.value->'items' AS items
+  FROM followed_project_candidates AS candidate
+  JOIN happyview_records AS source
+    ON source.uri = candidate.uri
+    AND source.collection = 'org.hypercerts.collection'
+  CROSS JOIN LATERAL (
+    SELECT CASE WHEN pg_input_is_valid(source.record, 'jsonb')
+      THEN source.record::jsonb ELSE NULL::jsonb END AS value
+    OFFSET 0
+  ) AS project
+  WHERE project.value->>'type' = 'project'
+),
+-- URIs that make a post "about" a followed project: the collection URI plus the
+-- activity URIs listed in that collection's current items[]. URI match only.
+project_subject_uris AS MATERIALIZED (
+  SELECT uri FROM followed_projects
+  UNION
+  SELECT item->'itemIdentifier'->>'uri'
+  FROM followed_projects CROSS JOIN patterns
+  CROSS JOIN LATERAL jsonb_array_elements(
+    CASE WHEN jsonb_typeof(followed_projects.items) = 'array'
+      THEN followed_projects.items ELSE '[]'::jsonb END
+  ) AS item
+  WHERE jsonb_typeof(item->'itemIdentifier'->'uri') = 'string'
+    AND length(item->'itemIdentifier'->>'uri') <= 8192
+    AND item->'itemIdentifier'->>'uri' ~ patterns.activity_uri
+),
+-- The viewer plus every followed account. Rows authored by a member are
+-- author-driven; every other row can only be target-driven.
+members AS MATERIALIZED (
+  SELECT did FROM followed_accounts
+  UNION
+  SELECT $1::text
+),
+-- The kinds filter selects collections before any record is read. A
+-- target-driven scan is attempted only when its target set is non-empty.
+selected_kinds AS MATERIALIZED (
+  SELECT kind.collection, kind.has_targets
+  FROM (VALUES
+    ('post', 'org.hypercerts.context.attachment',
+      EXISTS (SELECT 1 FROM project_subject_uris)),
+    ('projectFollow', 'app.certified.graph.entityFollow',
+      EXISTS (SELECT 1 FROM followed_projects)),
+    ('accountFollow', 'app.certified.graph.follow',
+      EXISTS (SELECT 1 FROM followed_accounts)),
+    ('repost', 'app.certified.feed.repost', false)
+  ) AS kind(name, collection, has_targets)
+  WHERE cardinality($3::text[]) = 0 OR kind.name = ANY($3::text[])
+),
+-- Author-driven rows: one (did, collection) index probe per member and
+-- selected collection; only those candidates are decoded, once.
+author_rows AS (
+  SELECT source.uri, source.cid, source.collection, source.did,
+    source.indexed_at, decoded.value
+  FROM members AS member
+  CROSS JOIN selected_kinds AS kind
+  JOIN happyview_records AS source
+    ON source.did = member.did AND source.collection = kind.collection
+  CROSS JOIN LATERAL (
+    SELECT CASE WHEN pg_input_is_valid(source.record, 'jsonb')
+      THEN source.record::jsonb ELSE NULL::jsonb END AS value
+    OFFSET 0
+  ) AS decoded
+  WHERE $2::text IS NULL OR member.did = $2
+),
+-- Target-driven rows: strangers' follows of followed accounts or projects and
+-- posts about followed projects. These cannot be found by author, so the
+-- collection is scanned and each record is decoded once. Only rows that hit a
+-- followed target (and are not already author-driven) are kept.
+target_rows AS MATERIALIZED (
+  SELECT source.uri, source.cid, source.collection, source.did,
+    source.indexed_at, decoded.value
+  FROM selected_kinds AS kind
+  JOIN happyview_records AS source ON source.collection = kind.collection
+  CROSS JOIN LATERAL (
+    SELECT CASE WHEN pg_input_is_valid(source.record, 'jsonb')
+      THEN source.record::jsonb ELSE NULL::jsonb END AS value
+    OFFSET 0
+  ) AS decoded
+  WHERE kind.has_targets
+    AND ($2::text IS NULL OR source.did = $2)
+    AND CASE source.collection
+      WHEN 'org.hypercerts.context.attachment' THEN
+        EXISTS (
+          SELECT 1 FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(decoded.value->'subjects') = 'array'
+              THEN decoded.value->'subjects' ELSE '[]'::jsonb END
+          ) AS subject
+          JOIN project_subject_uris AS target ON target.uri = subject->>'uri'
+        )
+        AND source.did NOT IN (SELECT did FROM members)
+      WHEN 'app.certified.graph.entityFollow' THEN
+        decoded.value->'subject'->>'uri' IN (SELECT uri FROM followed_projects)
+        AND source.did NOT IN (SELECT did FROM members)
+      WHEN 'app.certified.graph.follow' THEN
+        decoded.value->>'subject' IN (SELECT did FROM followed_accounts)
+        AND source.did NOT IN (SELECT did FROM members)
+      ELSE false
+    END
+),
+candidates AS (
+  SELECT * FROM author_rows
+  UNION ALL
+  SELECT * FROM target_rows
+),
+classified AS (
+  SELECT event.uri, event.cid, event.collection, event.did AS actor_did,
+    event.indexed_at, event.value->>'createdAt' AS created_at,
+    CASE event.collection
+      WHEN 'org.hypercerts.context.attachment' THEN 'post'
+      WHEN 'app.certified.graph.entityFollow' THEN 'projectFollow'
+      WHEN 'app.certified.graph.follow' THEN 'accountFollow'
+      WHEN 'app.certified.feed.repost' THEN 'repost'
+    END AS kind,
+    CASE WHEN event.collection = 'app.certified.feed.repost'
+      THEN event.value->'subject'->>'uri' END AS reposted_post_uri
+  FROM candidates AS event
+  CROSS JOIN patterns
+  WHERE event.value->>'$type' = event.collection
+    AND CASE event.collection
+      WHEN 'org.hypercerts.context.attachment' THEN
+        event.value->>'contentType' = 'update'
+        AND (
+          event.did = $1
+          OR event.did IN (SELECT did FROM followed_accounts)
+          OR EXISTS (
+            SELECT 1 FROM jsonb_array_elements(
+              CASE WHEN jsonb_typeof(event.value->'subjects') = 'array'
+                THEN event.value->'subjects' ELSE '[]'::jsonb END
+            ) AS subject
+            JOIN project_subject_uris AS target ON target.uri = subject->>'uri'
+          )
+        )
+      WHEN 'app.certified.graph.entityFollow' THEN
+        (event.value->'via' IS NULL OR event.value->'via' = 'null'::jsonb)
+        AND event.value->'subject'->>'$type' = 'app.certified.defs#recordSubject'
+        AND jsonb_typeof(event.value->'subject'->'uri') = 'string'
+        AND event.value->'subject'->>'uri' ~ patterns.project_uri
+        AND (
+          event.value->'subject'->>'uri' IN (SELECT uri FROM followed_projects)
+          OR (
+            event.did IN (SELECT did FROM followed_accounts)
+            AND EXISTS (
+              SELECT 1
+              FROM happyview_records AS project_record
+              CROSS JOIN LATERAL (
+                SELECT CASE WHEN pg_input_is_valid(project_record.record, 'jsonb')
+                  THEN project_record.record::jsonb ELSE NULL::jsonb END AS value
+                OFFSET 0
+              ) AS project
+              WHERE project_record.uri = event.value->'subject'->>'uri'
+                AND project_record.collection = 'org.hypercerts.collection'
+                AND project.value->>'type' = 'project'
+            )
+          )
+        )
+      WHEN 'app.certified.graph.follow' THEN
+        (event.value->'via' IS NULL OR event.value->'via' = 'null'::jsonb)
+        AND jsonb_typeof(event.value->'subject') = 'string'
+        AND event.value->>'subject' ~ patterns.did
+        AND (
+          event.did IN (SELECT did FROM followed_accounts)
+          OR event.value->>'subject' IN (SELECT did FROM followed_accounts)
+        )
+      WHEN 'app.certified.feed.repost' THEN
+        event.did IN (SELECT did FROM followed_accounts)
+        AND jsonb_typeof(event.value->'subject'->'uri') = 'string'
+        AND event.value->'subject'->>'uri' ~ patterns.post_uri
+        AND jsonb_typeof(event.value->'subject'->'cid') = 'string'
+        AND event.value->'subject'->>'cid' <> ''
+      ELSE false
+    END
+),
+parsed AS (
+  SELECT event.uri, event.cid, event.collection, event.actor_did, event.kind,
+    event.reposted_post_uri,
+    CASE WHEN event.created_at ~ patterns.rfc3339
+      AND event.created_at !~ '-00:00$'
+      AND pg_input_is_valid(event.created_at, 'timestamptz')
+      THEN event.created_at::timestamptz END AS created_ts,
+    CASE WHEN (event.indexed_at ~ patterns.rfc3339 OR event.indexed_at ~ patterns.legacy)
+      AND event.indexed_at !~ '-00(:00(:00)?)?$'
+      AND pg_input_is_valid(event.indexed_at, 'timestamptz')
+      THEN event.indexed_at::timestamptz END AS indexed_ts
+  FROM classified AS event CROSS JOIN patterns
+),
+-- An out-of-range createdAt falls back to indexed_at; when that is out of range
+-- (or absent/invalid) the row is excluded. The range also rejects infinity.
+timed AS (
+  SELECT event.uri, event.cid, event.collection, event.actor_did, event.kind,
+    event.reposted_post_uri,
+    COALESCE(
+      CASE WHEN event.created_ts BETWEEN patterns.min_effective_at AND patterns.max_effective_at
+        THEN event.created_ts END,
+      CASE WHEN event.indexed_ts BETWEEN patterns.min_effective_at AND patterns.max_effective_at
+        THEN event.indexed_ts END
+    ) AS effective_at
+  FROM parsed AS event CROSS JOIN patterns
+),
+paged AS (
+  SELECT * FROM timed
+  WHERE effective_at IS NOT NULL
+    AND (cardinality($3::text[]) = 0 OR kind = ANY($3::text[]))
+    AND ($4::timestamptz IS NULL OR (effective_at, uri) < ($4::timestamptz, $5::text))
+  ORDER BY effective_at DESC, uri DESC
+  LIMIT $6::integer
+)
+SELECT uri, cid, collection, actor_did, kind, reposted_post_uri,
+  to_char(effective_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_value
+FROM paged
+ORDER BY effective_at DESC, uri DESC

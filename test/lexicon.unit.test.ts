@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest'
 
 import { FeedErrorCode } from '../src/feed/errors.js'
 import {
+  maearthFeedParams,
+  maearthFeedView,
+} from '../src/lexicons/org/hypercerts/feed/defs.js'
+import {
   $input as hydratedInput,
   $output as hydratedOutput,
 } from '../src/lexicons/org/hypercerts/feed/getFeed.js'
@@ -200,7 +204,7 @@ describe('feed Lexicon contract', () => {
       valueAt(hydratedMain, 'input', 'schema', 'properties', 'feedId'),
     ).toMatchObject({
       type: 'string',
-      knownValues: [feedId],
+      knownValues: [feedId, 'org.hypercerts.feed.defs#maearthFeed'],
     })
     expect(
       valueAt(
@@ -220,7 +224,7 @@ describe('feed Lexicon contract', () => {
     ).toMatchObject({
       type: 'union',
       closed: false,
-      refs: [paramsType],
+      refs: [paramsType, 'org.hypercerts.feed.defs#maearthFeedParams'],
     })
     expect(
       valueAt(defs, 'hypercertsFeedParams', 'required') ?? [],
@@ -365,7 +369,10 @@ describe('feed Lexicon contract', () => {
     ).toMatchObject({
       type: 'union',
       closed: false,
-      refs: ['org.hypercerts.feed.defs#hypercertsFeedView'],
+      refs: [
+        'org.hypercerts.feed.defs#hypercertsFeedView',
+        'org.hypercerts.feed.defs#maearthFeedView',
+      ],
     })
     expect(valueAt(defs, 'hypercertsFeedView', 'required')).toEqual([
       'kind',
@@ -577,5 +584,70 @@ describe('feed Lexicon contract', () => {
     ],
   ])('rejects %s', (_label, item) => {
     expect(() => hydratedOutput.schema.$parse({ feed: [item] })).toThrow()
+  })
+})
+
+describe('MaEarth feed Lexicon contract', () => {
+  const maearthKinds = ['post', 'projectFollow', 'accountFollow', 'repost']
+
+  it('defines bounded open-enum params and a view requiring kind and createdAt', () => {
+    expect(valueAt(defs, 'maearthFeed', 'type')).toBe('token')
+    expect(valueAt(defs, 'maearthFeedParams', 'required')).toBeUndefined()
+    expect(objectAt(defs, 'maearthFeedParams', 'properties')).toMatchObject({
+      viewerDid: { type: 'string', format: 'did', maxLength: 256 },
+      actorDid: { type: 'string', format: 'did', maxLength: 256 },
+      kinds: {
+        type: 'array',
+        maxLength: 32,
+        items: { type: 'string', maxLength: 64, knownValues: maearthKinds },
+      },
+    })
+    expect(valueAt(defs, 'maearthFeedView', 'required')).toEqual([
+      'kind',
+      'createdAt',
+    ])
+    expect(objectAt(defs, 'maearthFeedView', 'properties')).toMatchObject({
+      kind: { type: 'string', maxLength: 64, knownValues: maearthKinds },
+      createdAt: { type: 'string', format: 'datetime' },
+      repostedPostUri: { type: 'string', format: 'at-uri' },
+    })
+  })
+
+  it('parses valid generated params and views and rejects malformed ones', () => {
+    const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
+    expect(
+      maearthFeedView.schema.$parse({
+        $type: viewType,
+        kind: 'repost',
+        createdAt: '2026-10-14T12:00:00.123456Z',
+        repostedPostUri: `at://${actorDid}/org.hypercerts.context.attachment/3kpn`,
+      }),
+    ).toMatchObject({ kind: 'repost' })
+    for (const invalid of [
+      { $type: viewType, kind: 'post' },
+      { $type: viewType, createdAt: '2026-10-14T12:00:00.000000Z' },
+      { $type: viewType, kind: 'post', createdAt: '10000-01-01T00:00:00Z' },
+      {
+        $type: viewType,
+        kind: 'repost',
+        createdAt: '2026-10-14T12:00:00.000000Z',
+        repostedPostUri: 'not-an-at-uri',
+      },
+    ]) {
+      expect(() => maearthFeedView.schema.$parse(invalid)).toThrow()
+    }
+    expect(
+      maearthFeedParams.schema.$parse({
+        $type: 'org.hypercerts.feed.defs#maearthFeedParams',
+        viewerDid,
+        kinds: ['post', 'future-kind'],
+      }),
+    ).toMatchObject({ viewerDid })
+    expect(() =>
+      maearthFeedParams.schema.$parse({
+        $type: 'org.hypercerts.feed.defs#maearthFeedParams',
+        viewerDid: 'not-a-did',
+      }),
+    ).toThrow()
   })
 })

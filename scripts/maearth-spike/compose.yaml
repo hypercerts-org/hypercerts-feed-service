@@ -1,0 +1,102 @@
+services:
+  postgres:
+    image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    environment:
+      POSTGRES_USER: spike
+      POSTGRES_DB: happyview
+      POSTGRES_PASSWORD: ${SPIKE_DB_PASSWORD:?set a disposable local password}
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      - '127.0.0.1::5432'
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U spike -d happyview']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  mocks:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock
+    environment:
+      FIXTURE_TOKEN: ${SPIKE_FIXTURE_TOKEN:?set a disposable fixture token}
+    ports:
+      - '127.0.0.1::8080'
+  happyview:
+    image: ghcr.io/gamesgamesgamesgamesgames/happyview:2.13.0@sha256:df44f5c7275e16cd6755b75c37e089fb22b24361f7084d1dc66f07d9c5667e64
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mocks:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://spike:${SPIKE_DB_PASSWORD}@postgres:5432/happyview
+      DATABASE_MAX_CONNECTIONS: '8'
+      PUBLIC_URL: http://happyview:3000
+      HOST: 0.0.0.0
+      PORT: '3000'
+      SESSION_SECRET: ${SPIKE_SESSION_SECRET:?set a disposable session secret}
+      TOKEN_ENCRYPTION_KEY: ${SPIKE_ENCRYPTION_KEY:?set a disposable encryption key}
+      JETSTREAM_URL: ws://mocks:8080
+      PLC_URL: http://127.0.0.1:9
+      RELAY_URL: http://127.0.0.1:9
+      TELEMETRY_COLLECTOR_URL: http://127.0.0.1:9
+      HTTP_PROXY: http://127.0.0.1:9
+      HTTPS_PROXY: http://127.0.0.1:9
+      ALL_PROXY: http://127.0.0.1:9
+      NO_PROXY: localhost,127.0.0.1,postgres,mocks
+      http_proxy: http://127.0.0.1:9
+      https_proxy: http://127.0.0.1:9
+      all_proxy: http://127.0.0.1:9
+      no_proxy: localhost,127.0.0.1,postgres,mocks
+    ports:
+      - '127.0.0.1::3000'
+  validation:
+    build:
+      context: ../..
+      dockerfile: scripts/maearth-spike/Dockerfile.validation
+    depends_on:
+      happyview:
+        condition: service_started
+    network_mode: service:happyview
+    environment:
+      SPIKE_DB_PASSWORD: ${SPIKE_DB_PASSWORD}
+      SPIKE_READER_PASSWORD: ${SPIKE_READER_PASSWORD}
+      SPIKE_FIXTURE_TOKEN: ${SPIKE_FIXTURE_TOKEN}
+      SPIKE_API_DIR: /opt/hypercerts-api
+      SPIKE_API_SHA: ${SPIKE_API_SHA:?export the clean API checkout SHA}
+      SPIKE_FEED_SHA: ${SPIKE_FEED_SHA:?export the feed checkout SHA}
+      TEST_DATABASE_URL: postgres://spike:${SPIKE_DB_PASSWORD}@postgres:5432/happyview
+    volumes:
+      - ${HYPERCERTS_API_DIR:?export HYPERCERTS_API_DIR to the clean API checkout}:/opt/hypercerts-api:ro
+  gateway:
+    image: node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f
+    command:
+      [
+        node,
+        --input-type=module,
+        -e,
+        "import net from 'node:net'; net.createServer(client => { const upstream = net.connect(3000, 'feed'); client.pipe(upstream).pipe(client); client.on('error', () => upstream.destroy()); upstream.on('error', () => client.destroy()); }).listen(3000, '0.0.0.0')",
+      ]
+    ports:
+      - '127.0.0.1::3000'
+    networks: [default, loopback]
+  feed:
+    build:
+      context: ../..
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://maearth_reader:${SPIKE_READER_PASSWORD:?set a disposable reader password}@postgres:5432/happyview
+      SERVICE_DID: did:web:feed.example
+      MAEARTH_FEED_ENABLED: 'true'
+      HOST: 0.0.0.0
+      PORT: '3000'
+      LOG_LEVEL: info
+    ports:
+      - '127.0.0.1::3000'
+networks:
+  default:
+    internal: true
+  loopback: {}

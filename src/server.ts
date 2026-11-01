@@ -5,11 +5,14 @@ import { createApp } from './app.js'
 import { createConfiguredServiceAuth } from './auth/service-auth.js'
 import { loadConfig } from './config.js'
 import { Database } from './database.js'
+import { createMaearthFeed, MaearthFeedService } from './feed/maearth.js'
+import { MAEARTH_FEED_ID } from './feed/maearth-types.js'
 import { createHypercertsFeed } from './feed/query.js'
 import { FeedRegistry } from './feed/registry.js'
 import { FeedService } from './feed/service.js'
 import { loadLocalEnvironment } from './environment.js'
 import { PostgresIdentityReader } from './hydration/identity.js'
+import { HydratedFeedRouter } from './hydration/router.js'
 import { HydratedFeedService } from './hydration/service.js'
 import {
   closeMetricsServer,
@@ -27,10 +30,22 @@ const hypercertsFeed = createHypercertsFeed(
   { database, metrics },
   config.trustedQualityLabelerDids,
 )
-const feeds = new FeedRegistry([hypercertsFeed])
+const feeds = new FeedRegistry([
+  hypercertsFeed,
+  ...(config.maearthFeedEnabled
+    ? [createMaearthFeed({ database, metrics })]
+    : []),
+])
 const feedService = new FeedService(feeds)
 const identities = new PostgresIdentityReader(database)
-const hydratedFeed = new HydratedFeedService(feeds, identities)
+const hydratedFeed = new HydratedFeedRouter(
+  new HydratedFeedService(feeds, identities),
+  new Map(
+    config.maearthFeedEnabled
+      ? [[MAEARTH_FEED_ID, new MaearthFeedService(feeds)]]
+      : [],
+  ),
+)
 const auth = createConfiguredServiceAuth(config)
 const app = createApp(
   database,

@@ -3,7 +3,11 @@ import type { Logger } from 'pino'
 
 import type { OptionalServiceAuth } from '../auth/service-auth.js'
 import type { HydratedFeedReader } from '../hydration/service.js'
-import type { GetHydratedFeedOutput } from '../hydration/types.js'
+import type { MaearthFeedView } from '../feed/maearth-types.js'
+import type {
+  HypercertsFeedView,
+  GetHydratedFeedOutput,
+} from '../hydration/types.js'
 import getFeed, { $output } from '../lexicons/org/hypercerts/feed/getFeed.js'
 import { registerFeedProcedure } from './feed-procedure.js'
 
@@ -20,8 +24,9 @@ export const registerGetFeed = (
     logger,
     auth,
     execute: (input) => feedService.getFeed(input),
-    parseOutput: (output: GetHydratedFeedOutput) =>
-      $output.schema.$parse(output),
+    parseOutput: (
+      output: GetHydratedFeedOutput<HypercertsFeedView | MaearthFeedView>,
+    ) => $output.schema.$parse(output),
     errorLog: 'hydrated feed generation failed',
   })
 }

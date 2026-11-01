@@ -1,6 +1,8 @@
 import type { FeedPageLoader, InternalSourceFeedRow } from '../feed/registry.js'
-import type { GetFeedSkeletonInput } from '../feed/types.js'
+import { FEED_KINDS, type GetFeedSkeletonInput } from '../feed/types.js'
+import type { MaearthFeedView } from '../feed/maearth-types.js'
 import type {
+  HypercertsFeedView,
   ActorContext,
   ActorSummary,
   GetHydratedFeedOutput,
@@ -18,6 +20,11 @@ import { buildActorSummary, buildFeedItemView } from './views.js'
 const identityInvariantError = (): Error =>
   new Error(
     'Hydrated feed identity invariant failed: the identity batch omitted or mismatched a context for a requested DID; verify IdentityReader returns one exact context per requested DID before serving hydrated pages.',
+  )
+
+const unsupportedKindError = (kind: string): Error =>
+  new Error(
+    `Hydrated Hypercerts feed invariant failed: a selected row has kind ${JSON.stringify(kind)}, which this hydrator does not serve; route every registered feedId to the hydrator that owns its row kinds before serving requests.`,
   )
 
 const requireActorSummary = (
@@ -53,7 +60,9 @@ const collectValidatedFeedRows = (
   const requestedDids = new Set<string>()
 
   for (const row of rows) {
-    const record = validateFeedRecord(row.kind, row.collection, row.sourceValue)
+    const kind = FEED_KINDS.find((candidate) => candidate === row.kind)
+    if (kind === undefined) throw unsupportedKindError(row.kind)
+    const record = validateFeedRecord(kind, row.collection, row.sourceValue)
     if (record === undefined) continue
 
     const endorsedDid = getEndorsedActorDid(record)
@@ -81,7 +90,7 @@ const buildHydratedFeedItems = (
       subject: row.uri,
       view: {
         $type: 'org.hypercerts.feed.defs#hypercertsFeedView',
-        kind: row.kind,
+        kind: record.kind,
         actor,
         content: buildFeedItemView(record, {
           ...(endorsedActor === undefined ? {} : { endorsedActor }),
@@ -100,7 +109,9 @@ const buildOutput = (
 
 /** Application seam consumed by the hydrated XRPC transport. */
 export interface HydratedFeedReader {
-  getFeed(input: GetFeedSkeletonInput): Promise<GetHydratedFeedOutput>
+  getFeed(
+    input: GetFeedSkeletonInput,
+  ): Promise<GetHydratedFeedOutput<HypercertsFeedView | MaearthFeedView>>
 }
 
 /** Coordinates one same-statement source page and one bounded identity batch. */
