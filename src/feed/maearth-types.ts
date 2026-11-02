@@ -32,4 +32,4 @@ export interface MaearthFeedView {
 }
 
 export const isMaearthKind = (kind: string): kind is MaearthKind =>
-  MAEARTH_KINDS.some((candidate) => candidate === kind)
+  (MAEARTH_KINDS as readonly string[]).includes(kind)

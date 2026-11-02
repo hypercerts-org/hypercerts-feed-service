@@ -10,9 +10,9 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
 
 - `viewerDid`: required anonymously; a verified service-auth issuer supplies it when authenticated. A conflicting body DID is rejected.
 - `kinds`: optional array of `post`, `projectFollow`, `accountFollow`, `repost`. Omitted or empty means all four. Account follows deliberately do not distinguish organizations from people; MaEarth owns that mapping.
-- `actorDid`: optional restriction **within the viewer's existing Following scope**, not an unrestricted profile feed.
+- `actorDid`: optional author restriction applied to the viewer's Following selection. The actor's own posts, follows and reposts appear when the actor is followed; a non-followed actor appears only through target-driven rows (their posts about a followed project, or their follows of a followed project or account). It is not an unrestricted profile feed.
 - Top-level `limit`: default 20, maximum 50. `cursor` is opaque and scoped to this feed.
-- Errors follow the Hypercerts feed: structurally invalid params (such as a malformed `viewerDid` or `actorDid`) return HTTP 400, and semantic errors (an unsupported `kinds` value, `limit` outside 1–50, or a missing `viewerDid`) return HTTP 422, both as `InvalidRequest`.
+- Errors follow the Hypercerts feed: structurally invalid params (such as a malformed `viewerDid` or `actorDid`) and anonymous requests without `viewerDid` return HTTP 400; semantic errors (an unsupported `kinds` value or `limit` outside 1–50) return HTTP 422. Both use `InvalidRequest`.
 
 `getFeedSkeleton` stays URI-only. `getFeed` returns merge metadata in a new open view variant:
 
@@ -77,7 +77,7 @@ The viewer's own graph edges can appear because their targets are followed. The 
 
 **Future-dated items are hidden.** A row whose effective timestamp is later than the database's statement time plus five minutes is dropped, whatever its kind, and whether it was author-driven or target-driven. The cutoff uses PostgreSQL's `statement_timestamp()` (one reading per statement) and a single named skew constant in `src/feed/maearth-query.sql`. Any `createdAt` that parses as a real future timestamp (2099, `9999-12-31T23:59:59Z`, or a value that lands beyond year 9999 after its offset) is excluded, **not** replaced by `indexed_at`; only an unparseable `createdAt`, or one before year 1, falls back, as above. An item whose only valid timestamp is a future `indexed_at` is also hidden. Hidden items are removed before the page limit is applied, so they never shorten a page or move the cursor. Because the cutoff moves with the clock, an item dated slightly in the future becomes visible once its time arrives, but only on a traversal that has not already paged past its position.
 
-One parameterized statement handles scope, selection and pagination for either endpoint. Sort order is effective timestamp descending, URI descending. MaEarth views require no profile query, source-body hydration, repost-target or post-subject reads, API calls, or backfilling of dropped items. The only records read beyond the selected ones are the followed-project `org.hypercerts.collection` records that resolve scope, in the same statement. Hypercerts selection and its existing view remain unchanged.
+One parameterized statement handles scope, selection and pagination for either endpoint. Sort order is effective timestamp descending, URI descending. MaEarth views require no profile query, source-body hydration, repost-target or post-subject reads, API calls, or backfilling of dropped items. The only records read beyond the selected ones are `org.hypercerts.collection` records looked up by primary key in the same statement: the viewer's followed projects (to resolve scope) and the collections named by followed accounts' entity follows (to check they are projects). Hypercerts selection and its existing view remain unchanged.
 
 ### Query shape and performance
 
