@@ -335,6 +335,27 @@ describe('HydratedFeedService', () => {
     )
   })
 
+  it('fails loudly instead of dropping a row whose kind belongs to another feed', async () => {
+    const identities = new FakeIdentities(allContexts())
+    const service = new HydratedFeedService(
+      new FakePages({
+        rows: [
+          sourceRow(),
+          sourceRow({
+            kind: 'repost',
+            collection: 'app.certified.feed.repost',
+          }),
+        ],
+      }),
+      identities,
+    )
+
+    await expect(service.getFeed(feedRequest())).rejects.toThrow(
+      /hydrated hypercerts feed invariant failed.*"repost".*does not serve/i,
+    )
+    expect(identities.calls).toEqual([])
+  })
+
   it('propagates page and identity read failures', async () => {
     const pageFailure = new Error('page query failed')
     const identityFailure = new Error('identity query failed')

@@ -52,10 +52,12 @@ Before configuring `DATABASE_URL`, verify using that login that it can connect, 
 
 Feed selection reads current rows from `happyview_records`. The service does not query PDS, AppView, HappyView APIs, or actor-status tables. A missing source row produces no feed event; there is no history or snapshot guarantee across requests.
 
-The supported source collections are:
+The supported source collections are listed below. `app.certified.graph.entityFollow` and `app.certified.feed.repost` are read only by the experimental MaEarth feed (see [MaEarth spike](maearth-spike.md)). MaEarth also reads `app.certified.graph.follow`, `org.hypercerts.context.attachment` and `org.hypercerts.collection`, which the Hypercerts feed uses too; the remaining collections serve only the Hypercerts feed.
 
 ```text
 app.certified.graph.follow
+app.certified.graph.entityFollow
+app.certified.feed.repost
 app.certified.actor.organization
 app.certified.actor.profile
 app.certified.badge.award
@@ -89,6 +91,23 @@ The statement performs these steps:
 Every caller-controlled SQL value is bound. TEXT-backed JSON is decoded only in per-consumer guarded projections; no whole-table JSON conversion is materialized, and source text is not carried through candidate sorting. Metadata and source-aware pages execute the same statement once; the final source join retrieves raw source text after pagination, so selection and source retrieval share one PostgreSQL statement snapshot. The adapter decodes only those selected source values; malformed source JSON is treated as invalid and hydration omits it without refilling the page. A missing or mismatched source join is an internal invariant failure.
 
 Skeleton pages expose URI-only subjects. Hydrated pages validate the selected source values, omit invalid values without refilling the page, and preserve the cursor for the selected source page. With at least one valid source, hydration performs one identity batch regardless of page size. Source JSON, CIDs, internal timestamps, and redundant actor DIDs are not returned.
+
+## Experimental MaEarth selection
+
+`src/feed/maearth-query.sql` reads current `org.hypercerts.context.attachment`, `app.certified.graph.follow`, `app.certified.graph.entityFollow`, `app.certified.feed.repost` and `org.hypercerts.collection` records. Its viewer graph, project resolution, event selection, timestamp normalization and keyset pagination share one statement. Both endpoints use the same selection; source-aware mode projects only MaEarth merge metadata from that statement, not raw source JSON. It requires no source rejoin, profile batch, quality labels or API calls. Beyond the selected records it reads only `org.hypercerts.collection` records by primary key: the viewer's followed projects (to resolve scope) and the collections named by followed accounts' entity follows (to check they are projects); it never reads repost targets or post subjects. The Hypercerts exact-source/hydration rules above remain specific to the Hypercerts algorithm.
+
+**Operator prerequisite.** The service never ingests. HappyView must have the lexicons for all five collections above installed and subscribed, and the records backfilled. A missing lexicon, subscription or backfill silently yields no rows for that kind or project; `GET /ready` does not detect it. Enable the feed with `MAEARTH_FEED_ENABLED=true` only after confirming this.
+
+Read rules specific to this feed:
+
+- **Record shape.** `$type` must equal the row's collection for attachments, follows, entity follows and reposts. Invalid JSON is absent.
+- **Projects.** A project is a current `org.hypercerts.collection` row, found by exact URI in the same statement, whose guarded-parsed JSON `type` is `'project'`. Missing, unparseable and other-typed (`favorites`, `portfolio`, `program`, absent) rows are not projects. The collection record's own `$type` is not checked.
+- **Direct follows only.** `via` must be absent or JSON `null` on `app.certified.graph.follow` and `app.certified.graph.entityFollow`, both when resolving the viewer's scope and when selecting follow items.
+- **Posts about projects.** A post's `subjects[].uri` must equal a followed project's collection URI or an `org.hypercerts.claim.activity` URI in that collection's current `items[].itemIdentifier.uri`. Matching is by URI only, never CID.
+- **Timestamps.** The effective timestamp must be 0001-01-01T00:00:00Z or later. An unparseable `createdAt`, or one before year 1 in UTC, falls back to `indexed_at` under the same guards; if that is also before year 1 or invalid the row is excluded. A row whose effective timestamp is later than the database's `statement_timestamp()` plus five minutes is excluded and never re-dated, so returned values never exceed year 9999: a `createdAt` that parses as a real future timestamp, including one beyond year 9999 after its offset, does not fall back to `indexed_at`. The Hypercerts feed applies no such cutoff.
+- **Repost targets.** A repost's `subject.uri` must be an `org.hypercerts.context.attachment` AT-URI that passes output validation: a record key of 1–512 characters that is neither `.` nor `..`, and an authority DID of at most 2048 characters. Its `subject.cid` must be a non-empty string. Other reposts are excluded, so a malformed target cannot fail a page.
+- **Follow targets.** `projectFollow` rows return the followed project URI (the `subject.uri` that resolved to a project) and `accountFollow` rows the followed DID (the follow `subject`), both from the records already read. A follow `subject` longer than 2048 characters is not a DID and is excluded.
+- **Reads.** Author-driven rows are read by `(did, collection)`; target-driven rows (strangers' follows of followed accounts or projects, and posts about followed projects) scan the selected collections. See [MaEarth spike](maearth-spike.md#query-shape-and-performance) for limits. The service creates no indexes.
 
 ## Organization-quality labels
 

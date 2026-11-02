@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest'
 
 import { FeedErrorCode } from '../src/feed/errors.js'
 import {
+  maearthFeedParams,
+  maearthFeedView,
+} from '../src/lexicons/org/hypercerts/feed/defs.js'
+import {
   $input as hydratedInput,
   $output as hydratedOutput,
 } from '../src/lexicons/org/hypercerts/feed/getFeed.js'
@@ -200,7 +204,7 @@ describe('feed Lexicon contract', () => {
       valueAt(hydratedMain, 'input', 'schema', 'properties', 'feedId'),
     ).toMatchObject({
       type: 'string',
-      knownValues: [feedId],
+      knownValues: [feedId, 'org.hypercerts.feed.defs#maearthFeed'],
     })
     expect(
       valueAt(
@@ -220,7 +224,7 @@ describe('feed Lexicon contract', () => {
     ).toMatchObject({
       type: 'union',
       closed: false,
-      refs: [paramsType],
+      refs: [paramsType, 'org.hypercerts.feed.defs#maearthFeedParams'],
     })
     expect(
       valueAt(defs, 'hypercertsFeedParams', 'required') ?? [],
@@ -365,7 +369,10 @@ describe('feed Lexicon contract', () => {
     ).toMatchObject({
       type: 'union',
       closed: false,
-      refs: ['org.hypercerts.feed.defs#hypercertsFeedView'],
+      refs: [
+        'org.hypercerts.feed.defs#hypercertsFeedView',
+        'org.hypercerts.feed.defs#maearthFeedView',
+      ],
     })
     expect(valueAt(defs, 'hypercertsFeedView', 'required')).toEqual([
       'kind',
@@ -577,5 +584,76 @@ describe('feed Lexicon contract', () => {
     ],
   ])('rejects %s', (_label, item) => {
     expect(() => hydratedOutput.schema.$parse({ feed: [item] })).toThrow()
+  })
+})
+
+describe('MaEarth feed Lexicon contract', () => {
+  const maearthKinds = ['post', 'projectFollow', 'accountFollow', 'repost']
+
+  it('defines bounded open-enum params and an open-enum view kind', () => {
+    expect(valueAt(defs, 'maearthFeed', 'type')).toBe('token')
+    expect(valueAt(defs, 'maearthFeedParams', 'required')).toBeUndefined()
+    expect(objectAt(defs, 'maearthFeedParams', 'properties')).toMatchObject({
+      viewerDid: { type: 'string', format: 'did', maxLength: 256 },
+      actorDid: { type: 'string', format: 'did', maxLength: 256 },
+      kinds: {
+        type: 'array',
+        maxLength: 32,
+        items: { type: 'string', maxLength: 64, knownValues: maearthKinds },
+      },
+    })
+    expect(objectAt(defs, 'maearthFeedView', 'properties')).toMatchObject({
+      kind: { type: 'string', maxLength: 64, knownValues: maearthKinds },
+    })
+  })
+
+  it('parses generated views and params, with every target optional, and rejects malformed ones', () => {
+    const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
+    const base = { $type: viewType, createdAt: '2026-10-14T12:00:00.123456Z' }
+    const postUri = `at://${actorDid}/org.hypercerts.context.attachment/3kpn`
+    const projectUri = `at://${actorDid}/org.hypercerts.collection/3kpn`
+    for (const valid of [
+      { kind: 'repost', repostedPostUri: postUri },
+      { kind: 'projectFollow', followedProjectUri: projectUri },
+      { kind: 'accountFollow', followedDid: actorDid },
+      // Older consumers and other kinds omit every target.
+      { kind: 'projectFollow' },
+      { kind: 'post' },
+    ]) {
+      expect(maearthFeedView.schema.$parse({ ...base, ...valid })).toEqual({
+        ...base,
+        ...valid,
+      })
+    }
+    expect(() =>
+      maearthFeedView.schema.$parse({ $type: viewType, kind: 'post' }),
+    ).toThrow()
+    expect(() =>
+      maearthFeedView.schema.$parse({
+        $type: viewType,
+        createdAt: base.createdAt,
+      }),
+    ).toThrow()
+    for (const invalid of [
+      { kind: 'post', createdAt: '10000-01-01T00:00:00Z' },
+      { kind: 'repost', repostedPostUri: 'not-an-at-uri' },
+      { kind: 'projectFollow', followedProjectUri: 'not-an-at-uri' },
+      { kind: 'projectFollow', followedProjectUri: 42 },
+      { kind: 'accountFollow', followedDid: 'not-a-did' },
+      // The parser's 2048-character DID cap is why the SQL guards the follow subject length.
+      { kind: 'accountFollow', followedDid: `did:web:${'a'.repeat(2041)}` },
+      { kind: 'accountFollow', followedDid: projectUri },
+    ]) {
+      expect(() =>
+        maearthFeedView.schema.$parse({ ...base, ...invalid }),
+      ).toThrow()
+    }
+    expect(
+      maearthFeedParams.schema.$parse({
+        $type: 'org.hypercerts.feed.defs#maearthFeedParams',
+        viewerDid,
+        kinds: ['post', 'future-kind'],
+      }),
+    ).toMatchObject({ viewerDid })
   })
 })

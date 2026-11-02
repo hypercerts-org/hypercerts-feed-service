@@ -1,3 +1,4 @@
+import type { MaearthKind } from './maearth-types.js'
 import { FeedError, FeedErrorCode } from './errors.js'
 import type { FeedKind, FeedParams, GetFeedSkeletonInput } from './types.js'
 
@@ -14,7 +15,7 @@ export interface InternalFeedRow {
   readonly cid: string
   readonly collection: string
   readonly actorDid: string
-  readonly kind: FeedKind
+  readonly kind: FeedKind | MaearthKind
   readonly sortValue: string
 }
 

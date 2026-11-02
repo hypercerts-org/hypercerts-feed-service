@@ -1,3 +1,7 @@
+import {
+  MAEARTH_FEED_PARAMS_TYPE,
+  type MaearthFeedParams,
+} from '../feed/maearth-types.js'
 import { FeedError, FeedErrorCode } from '../feed/errors.js'
 import {
   HYPERCERTS_FEED_PARAMS_TYPE,
@@ -12,21 +16,21 @@ import type { ServiceAuthCredentials } from './service-auth.js'
  * omit viewerDid only for authenticated requests; a supplied value is checked
  * before it is replaced by the verified identity.
  */
-const isHypercertsFeedParams = (
+const isViewerScopedParams = (
   params: FeedParams | undefined,
-): params is HypercertsFeedParams =>
-  params?.$type === HYPERCERTS_FEED_PARAMS_TYPE
+): params is HypercertsFeedParams | MaearthFeedParams =>
+  params?.$type === HYPERCERTS_FEED_PARAMS_TYPE ||
+  params?.$type === MAEARTH_FEED_PARAMS_TYPE
 
 export const applyAuthenticatedViewer = (
   input: GetFeedSkeletonInput,
   credentials: ServiceAuthCredentials | undefined,
 ): GetFeedSkeletonInput => {
   const params = input.params
-  if (!isHypercertsFeedParams(params)) return input
-  const hypercertsParams = params
+  if (!isViewerScopedParams(params)) return input
 
   if (credentials === undefined) {
-    if (hypercertsParams.viewerDid === undefined) {
+    if (params.viewerDid === undefined) {
       throw new FeedError(
         FeedErrorCode.InvalidRequest,
         'params.viewerDid is required for anonymous requests; provide the viewer DID or send a valid service-auth bearer token and retry.',
@@ -35,10 +39,7 @@ export const applyAuthenticatedViewer = (
     return input
   }
 
-  if (
-    hypercertsParams.viewerDid !== undefined &&
-    hypercertsParams.viewerDid !== credentials.did
-  ) {
+  if (params.viewerDid !== undefined && params.viewerDid !== credentials.did) {
     throw new FeedError(
       FeedErrorCode.InvalidRequest,
       'params.viewerDid does not match the authenticated service caller; omit viewerDid or use the authenticated viewer DID and retry.',
@@ -48,7 +49,7 @@ export const applyAuthenticatedViewer = (
   return {
     ...input,
     params: {
-      ...hypercertsParams,
+      ...params,
       viewerDid: credentials.did,
     },
   }

@@ -1,3 +1,5 @@
+import type { MaearthFeedParams } from './maearth-types.js'
+
 /** Organization quality categories understood by the Certified Orglabeler policy. */
 export const ORGANIZATION_QUALITIES = [
   'high-quality',
@@ -75,7 +77,8 @@ export interface UnknownFeedParams {
 }
 
 /** Parameters for any feed algorithm accepted by the public open union. */
-export type FeedParams = HypercertsFeedParams | UnknownFeedParams
+export type FeedParams =
+  HypercertsFeedParams | MaearthFeedParams | UnknownFeedParams
 
 /** Raw request body shared by the skeleton and hydrated feed procedures. */
 export interface GetFeedSkeletonInput {

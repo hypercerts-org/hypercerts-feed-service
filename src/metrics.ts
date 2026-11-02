@@ -7,6 +7,7 @@ import {
 } from 'prom-client'
 
 import type { FeedErrorCode } from './feed/errors.js'
+import type { MaearthKind } from './feed/maearth-types.js'
 import type { FeedKind } from './feed/types.js'
 
 const boundedHttpMethod = (method: string): 'GET' | 'POST' | 'OTHER' => {
@@ -100,7 +101,7 @@ export class Metrics {
   }
 
   /** Records generated page size and its bounded event-kind distribution. */
-  observeResult(kinds: readonly FeedKind[]): void {
+  observeResult(kinds: readonly (FeedKind | MaearthKind)[]): void {
     this.#resultItems.observe(kinds.length)
     for (const kind of kinds) this.#resultKinds.inc({ kind })
   }

@@ -32,6 +32,8 @@ export interface Config {
   readonly didResolutionTimeoutMs: number
   /** Orglabeler DIDs trusted to provide account-quality labels. */
   readonly trustedQualityLabelerDids: readonly string[]
+  /** Registers the experimental MaEarth Following feed. Off unless explicitly enabled. */
+  readonly maearthFeedEnabled: boolean
   /** Pino logging threshold. */
   readonly logLevel: string
 }
@@ -74,6 +76,20 @@ const optionalIntegerEnv = (
   return raw === undefined || raw === ''
     ? undefined
     : parseIntegerEnv(raw, name, minimum, maximum)
+}
+
+const booleanEnv = (
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: boolean,
+): boolean => {
+  const raw = env[name]
+  if (raw === undefined || raw === '') return fallback
+  if (raw === 'true') return true
+  if (raw === 'false') return false
+  throw new Error(
+    `${name} must be "true" or "false"; change ${name} from ${JSON.stringify(raw)} to true or false, or unset it to use the default (${String(fallback)}).`,
+  )
 }
 
 /** Loads and validates process environment values before any listener or pool is started. */
@@ -203,6 +219,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
       120_000,
     ),
     trustedQualityLabelerDids,
+    maearthFeedEnabled: booleanEnv(env, 'MAEARTH_FEED_ENABLED', false),
     logLevel:
       env.LOG_LEVEL === undefined || env.LOG_LEVEL === ''
         ? 'info'

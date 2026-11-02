@@ -32,13 +32,19 @@
             "feedId": {
               "type": "string",
               "maxLength": 512,
-              "knownValues": ["org.hypercerts.feed.defs#hypercertsFeed"],
+              "knownValues": [
+                "org.hypercerts.feed.defs#hypercertsFeed",
+                "org.hypercerts.feed.defs#maearthFeed"
+              ],
               "description": "Identifier of the feed algorithm to execute."
             },
             "params": {
               "type": "union",
               "closed": false,
-              "refs": ["org.hypercerts.feed.defs#hypercertsFeedParams"],
+              "refs": [
+                "org.hypercerts.feed.defs#hypercertsFeedParams",
+                "org.hypercerts.feed.defs#maearthFeedParams"
+              ],
               "description": "Algorithm-specific parameters. Omit when the selected feed accepts none."
             },
             "limit": {

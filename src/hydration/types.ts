@@ -128,13 +128,13 @@ export interface HypercertsFeedView {
 }
 
 /** Generic hydrated item built from one validated source record. */
-export interface HydratedFeedItem {
+export interface HydratedFeedItem<View = HypercertsFeedView> {
   readonly subject: string
-  readonly view: HypercertsFeedView
+  readonly view: View
 }
 
 /** Public response body projected by the hydrated feed service. */
-export interface GetHydratedFeedOutput {
-  readonly feed: readonly HydratedFeedItem[]
+export interface GetHydratedFeedOutput<View = HypercertsFeedView> {
+  readonly feed: readonly HydratedFeedItem<View>[]
   readonly cursor?: string
 }
