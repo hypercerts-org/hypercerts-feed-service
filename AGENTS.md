@@ -22,7 +22,7 @@ Before changing feed behavior, read together:
 - `src/feed/registry.ts` and `src/feed/sql-feed.ts` — feed dispatch plus shared parsing, cursor, execution, pagination, and metrics policy
 - `test/feed.integration.test.ts` — cross-table, source-mode, and pagination invariants
 - `docs/database-contract.md` — HappyView schema, current-state, and label-projection contract
-- for the MaEarth feed instead: `src/feed/maearth-query.sql`, `src/feed/maearth.ts`, `test/maearth.integration.test.ts`, and `docs/maearth-spike.md`
+- for the MaEarth feed, in addition to the shared `src/feed/registry.ts` and `src/feed/sql-feed.ts`: `src/feed/maearth-query.sql`, `src/feed/maearth.ts`, `test/maearth.integration.test.ts`, and `docs/maearth-spike.md`
 
 ## Commands
 
