@@ -39,17 +39,15 @@ Callers can be anonymous (they must then send `params.viewerDid`) or use AT Prot
 Activity from accounts the viewer follows, optionally widened by trusted evaluators' endorsements and filtered by organization quality labels. Kinds: `cert.create`, `collection.create`, `project.created_with_cert`, `evaluation.create`, `measurement.create`, `update.create`, `endorsement.award`.
 
 ```bash
-curl -sS http://localhost:3000/xrpc/org.hypercerts.feed.getFeed \
+curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
   -H 'content-type: application/json' \
   --data '{
     "feedId": "org.hypercerts.feed.defs#hypercertsFeed",
     "params": {
       "$type": "org.hypercerts.feed.defs#hypercertsFeedParams",
-      "viewerDid": "did:plc:ar7c4by46qjdydhdevvrndac",
-      "trustedEvaluators": ["did:plc:ewvi7nxzyoun6zhxrhs64oiz"],
-      "organizationQuality": { "allowed": ["high-quality", "standard"], "includeUnrated": false }
+      "viewerDid": "did:plc:m766f2lmgsdu2f363ja5d5hr"
     },
-    "limit": 20
+    "limit": 1
   }'
 ```
 
@@ -57,12 +55,28 @@ curl -sS http://localhost:3000/xrpc/org.hypercerts.feed.getFeed \
 {
   "feed": [
     {
-      "subject": "at://did:plc:ewvi7nxzyoun6zhxrhs64oiz/org.hypercerts.context.evaluation/3kpn",
+      "subject": "at://did:plc:nfd56jdcukm76ogr43ckjvr7/app.certified.badge.award/3mywt7grsgy2h",
       "view": {
         "$type": "org.hypercerts.feed.defs#hypercertsFeedView",
-        "kind": "evaluation.create",
-        "actor": { "did": "did:plc:ewvi7nxzyoun6zhxrhs64oiz", "displayName": "Evaluator" },
-        "content": { "$type": "org.hypercerts.feed.defs#evaluationView", "summary": "Strong evidence", "...": "..." }
+        "kind": "endorsement.award",
+        "actor": {
+          "did": "did:plc:nfd56jdcukm76ogr43ckjvr7",
+          "displayName": "holke.xyz",
+          "avatar": {
+            "$type": "org.hypercerts.defs#smallImage",
+            "image": {
+              "$type": "blob",
+              "ref": { "$link": "bafkreiapzh7gatkrwfgrop7qweb7zllbqmqsjxcn7qyishwfkp4ept4kiy" },
+              "mimeType": "image/jpeg",
+              "size": 1154171
+            }
+          }
+        },
+        "content": {
+          "$type": "org.hypercerts.feed.defs#endorsementView",
+          "subject": { "did": "did:plc:2zaqs2fpnxmzvjepb2kksahq" },
+          "createdAt": "2026-10-28T13:10:50.018Z"
+        }
       }
     }
   ],
@@ -74,19 +88,19 @@ curl -sS http://localhost:3000/xrpc/org.hypercerts.feed.getFeed \
 
 `feedId`: `org.hypercerts.feed.defs#maearthFeed`
 
-Off by default; set `MAEARTH_FEED_ENABLED=true` to turn it on. When off, requests for it return `UnsupportedFeed`. Kinds: `post`, `projectFollow`, `accountFollow`, `repost`. Optional params: `kinds` and `actorDid` (narrows the viewer's Following scope to one author).
+Off by default; set `MAEARTH_FEED_ENABLED=true` to turn it on (it is on for all three hosted instances). When off, requests for it return `UnsupportedFeed`. Kinds: `post`, `projectFollow`, `accountFollow`, `repost`. Optional params: `kinds` and `actorDid` (narrows the viewer's Following scope to one author).
 
 ```bash
-curl -sS http://localhost:3000/xrpc/org.hypercerts.feed.getFeed \
+curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
   -H 'content-type: application/json' \
   --data '{
     "feedId": "org.hypercerts.feed.defs#maearthFeed",
     "params": {
       "$type": "org.hypercerts.feed.defs#maearthFeedParams",
-      "viewerDid": "did:plc:cccccccccccccccccccccccc",
-      "kinds": ["post", "repost"]
+      "viewerDid": "did:plc:agicfaldjijjzm2rjnumzzw3",
+      "kinds": ["repost"]
     },
-    "limit": 20
+    "limit": 1
   }'
 ```
 
@@ -94,13 +108,18 @@ curl -sS http://localhost:3000/xrpc/org.hypercerts.feed.getFeed \
 
 ```json
 {
-  "subject": "at://did:plc:dddddddddddddddddddddddd/app.certified.feed.repost/3jzfcijpj2zd",
-  "view": {
-    "$type": "org.hypercerts.feed.defs#maearthFeedView",
-    "kind": "repost",
-    "createdAt": "2026-10-14T12:00:00.123456Z",
-    "repostedPostUri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.context.attachment/original"
-  }
+  "feed": [
+    {
+      "subject": "at://did:plc:bqkfguw3v76x5arrun2vybp2/app.certified.feed.repost/3mzwurdidkk25",
+      "view": {
+        "$type": "org.hypercerts.feed.defs#maearthFeedView",
+        "kind": "repost",
+        "createdAt": "2026-11-10T07:03:34.692000Z",
+        "repostedPostUri": "at://did:plc:uuvfp7xadcud56pjxbka26lc/org.hypercerts.context.attachment/3mxbyjkmrkk2u"
+      }
+    }
+  ],
+  "cursor": "eyJ2ZXJzaW9uIjox..."
 }
 ```
 
