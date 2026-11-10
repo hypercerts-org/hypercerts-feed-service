@@ -47,7 +47,7 @@ GRANT SELECT ON TABLE public.happyview_records, public.happyview_labels
 ALTER ROLE hypercerts_feed_reader SET default_transaction_read_only = on;
 ```
 
-The service has no migrations or feed tables of its own. `/ready` checks that the database can be reached, PostgreSQL 16 can safely validate JSON and timestamp text, and the session is read-only. It does not check HappyView tables, labeler subscription health, label completeness, or ingestion freshness. See [`docs/database-contract.md`](docs/database-contract.md) for the runtime schema contract.
+The service has no migrations or feed tables of its own. `/ready` checks that the database can be reached, PostgreSQL 16 can safely validate JSON and timestamp text, and the session is read-only. It does not check HappyView tables, labeler subscription health, label completeness, or ingestion freshness. See [`docs/database-contract.md`](database-contract.md) for the runtime schema contract.
 
 Before cutover, grant the service read-only access to `happyview_records` and `happyview_labels`, confirm that trusted labeler subscriptions are configured, and verify the record collections needed by this service are being stored. A present label row proves only that HappyView currently projects that label; it does not prove that every label was ingested.
 
