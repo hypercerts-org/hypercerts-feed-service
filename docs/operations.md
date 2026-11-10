@@ -36,7 +36,7 @@ Use a dedicated login that has only `SELECT` access. The service also sets `defa
 
 Each service replica has its own limited in-process pool. When planning database connections, allow for `replica count × DATABASE_MAX_CONNECTIONS`. Use an external pooler if many replicas share a PostgreSQL server with few available connections.
 
-Example operator setup:
+Example operator setup. Run it while connected to the `happyview` database (for example `psql -d happyview`), since schema and table grants apply to the current database:
 
 ```sql
 CREATE ROLE hypercerts_feed_reader LOGIN PASSWORD '<managed-secret>';
@@ -59,19 +59,23 @@ docker run --rm -p 3000:3000 \
   -e DATABASE_URL='postgresql://...' \
   -e SERVICE_DID='did:web:feed.example' \
   -e TRUSTED_QUALITY_LABELER_DIDS='did:plc:ar7c4by46qjdydhdevvrndac' \
+  -e METRICS_HOST=0.0.0.0 -e METRICS_PORT=3001 \
+  -p 10.0.0.5:3001:3001 \
   hypercerts-feed-service
 ```
 
+Here `10.0.0.5` stands for a private host address reachable only by your metrics collector; drop the metrics lines if you don't collect metrics.
+
 Deploy the service beside HappyView and use private networking for the database.
 
-To expose metrics, set a private metrics listener separate from the public application port:
+To expose metrics, set a metrics listener separate from the public application port:
 
 ```env
 METRICS_HOST=0.0.0.0
 METRICS_PORT=3001
 ```
 
-Configure a compatible Prometheus collector to read `http://<private-service-host>:3001/metrics`. The `GET /metrics` response uses Prometheus-compatible exposition format. The listener has no application-level authentication, so do not attach a public domain or TCP proxy to the metrics port. Each replica exposes only its current in-memory registry; the collector owns aggregation, retention, and historical data. When `METRICS_PORT` is unset or empty, the metrics listener is disabled. `/metrics` remains unavailable on the public application port.
+Configure a compatible Prometheus collector to read `http://<private-service-host>:3001/metrics`. The `GET /metrics` response uses Prometheus-compatible exposition format. The listener has no authentication. `METRICS_HOST=0.0.0.0` binds every interface, so on a directly reachable host anyone can read it by IP even without a public domain or proxy. Bind it to a private address, or firewall the port so only the collector can reach it. Each replica exposes only its current in-memory registry; the collector owns aggregation, retention, and historical data. When `METRICS_PORT` is unset or empty, the metrics listener is disabled. `/metrics` remains unavailable on the public application port.
 
 Set per-IP rate limits at the gateway. The first public policy allows 60 feed requests per minute for each client IP, with a burst of 20. When a client exceeds the limit, return HTTP 429 with `Retry-After`. Keep health and readiness private and outside this public limit. Adjust the limits using measured query response time and pool saturation.
 
@@ -79,7 +83,7 @@ The process limits request body size, HTTP request receive time, pool size, conn
 
 ## Endpoints for operators
 
-`GET /` returns a small JSON description of the service and lists its public XRPC procedures. It does not query the database or report service readiness. For a hostname-level `did:web` configured as `SERVICE_DID`, `GET /.well-known/did.json` publishes a DID document with a `#hypercerts_feed` service entry (`HypercertsFeedService`) pointing to the HTTPS origin derived from that DID. The route uses the configured DID, not the request hostname. Non-`did:web` service DIDs do not publish a document here.
+`GET /` returns a small JSON description of the service and lists its public XRPC procedures. It does not query the database or report service readiness. For a hostname-level `did:web` configured as `SERVICE_DID`, `GET /.well-known/did.json` publishes a DID document with a `#hypercerts_feed` service entry (`HypercertsFeedService`) pointing to the HTTPS origin derived from that DID. The route uses the configured DID, not the request hostname. Non-`did:web` service DIDs do not publish a document here, and neither does a `did:web` whose hostname uses anything other than lowercase letters, digits, dots and hyphens: an encoded port such as `did:web:localhost%3A3000` returns 404, so arrange discovery separately.
 
 - `GET /.well-known/did.json`: serves the configured hostname-level `did:web` identity and `#hypercerts_feed` service entry; its endpoint comes from `SERVICE_DID`, not the request hostname.
 - `GET /health`: checks only whether the process is alive.

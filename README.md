@@ -14,13 +14,13 @@ It does not ingest or write records, call PDS or AppView APIs, or keep history. 
 
 ## Endpoints
 
-| Route                                            | Purpose                                                                            |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `POST /xrpc/org.hypercerts.feed.getFeedSkeleton` | Ordered page of source record AT-URIs, for clients that hydrate records themselves |
-| `POST /xrpc/org.hypercerts.feed.getFeed`         | The same page with each item's view (kind, actor, and content)                     |
-| `GET /`                                          | Short JSON description of the service                                              |
-| `GET /.well-known/did.json`                      | DID document when `SERVICE_DID` is a `did:web`                                     |
-| `GET /health`, `GET /ready`                      | Liveness and database readiness (keep private)                                     |
+| Route                                            | Purpose                                                                                                                                                                       |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /xrpc/org.hypercerts.feed.getFeedSkeleton` | Ordered page of source record AT-URIs, for clients that hydrate records themselves                                                                                            |
+| `POST /xrpc/org.hypercerts.feed.getFeed`         | The same page with a feed-specific view per item. Invalid records are dropped, so a page can be short or empty and still have a cursor; keep paging while a cursor is present |
+| `GET /`                                          | Short JSON description of the service                                                                                                                                         |
+| `GET /.well-known/did.json`                      | DID document when `SERVICE_DID` is a `did:web`                                                                                                                                |
+| `GET /health`, `GET /ready`                      | Liveness and database readiness (keep private)                                                                                                                                |
 
 Both feed procedures take the same JSON body:
 

@@ -66,7 +66,9 @@ Each skeleton entry intentionally contains only the source record AT-URI. A down
 
 Every hydrated entry has a generic source `subject` and an open `view` union. The current `hypercertsFeedView` variant owns the Hypercerts event kind, actor, and kind-specific content. Clients must tolerate unknown future feed-view and content variants.
 
-### What you get
+### What you get (Hypercerts feed)
+
+These guarantees apply to the Hypercerts feed. MaEarth entries carry metadata only, with no `actor` or `content`, and skip source hydration; see the MaEarth section below.
 
 Every hydrated feed entry comes from a valid source record. Each entry has a feed-specific view and kind-specific content.
 
@@ -76,7 +78,7 @@ An evaluation, measurement, or update may point to another record by its exact U
 
 Clients must accept image and feed formats they do not know. Known images keep their original Hypercerts and AT Protocol formats.
 
-### What the service does not do
+### What the service does not do (Hypercerts feed)
 
 The service removes invalid feed items and does not replace them. A page may therefore have fewer items than requested, or no items. The cursor still advances past every record the service checked.
 
@@ -113,6 +115,7 @@ Public errors never show SQL, database credentials, table contents, internal cau
 - `trustedEvaluators` adds the subjects of every current, active endorsement award from each evaluator.
 - An endorsement definition with no `allowedIssuers` allows any issuer. When it is present, only its listed issuer DIDs qualify. An empty or malformed value allows no issuers.
 - The service removes the viewer. It does not query actor status; only the current follow, award, and feed records present in HappyView affect selection.
+- `params.organizationQuality` sets the quality policy: `{ "allowed": [...], "includeUnrated": true | false }`, both required. `allowed` takes up to 8 labels; known values are `high-quality`, `standard`, `draft` and `likely-test`. `includeUnrated` decides whether organizations with no active trusted label qualify. Omit the object to apply no quality filter.
 - The organization-quality rules run against the final combined author list before event selection. Only exact `app.certified.actor.organization/self` records count as organizations.
 - Trusted quality labelers come only from the service configuration. Quality labels are current positive `happyview_labels` rows matched to a bare organization DID. `cts` and `exp` are stored as TEXT and must be complete, finite RFC3339 or legacy PostgreSQL timestamp values; `cts` is validated but not used for ordering, and `exp` is validated before casting. Malformed, date-only, nonfinite, or elapsed values are inactive. HappyView removes a matching row when it receives a negation, and the table has no label CID or history. A row proves only that HappyView currently projects that label, not that every label was ingested. Callers cannot choose label sources.
 - Leaving out `kinds`, or passing an empty list, includes every supported kind. Unknown kinds are rejected as `InvalidRequest`.
@@ -153,7 +156,7 @@ Entries appear newest first using an internal feed timestamp. HappyView stores r
 **Database work**
 
 - A skeleton page uses one database query.
-- A full feed page also loads actor and profile details when it has valid entries.
+- A Hypercerts `getFeed` page also loads actor and profile details when it has valid entries. MaEarth pages load no profiles.
 - The service never makes extra queries to fill gaps left by invalid entries.
 
 **Freshness**
@@ -164,7 +167,7 @@ Each page is a separate database read. Changes made between requests may appear 
 
 **Record size**
 
-The service reads at most 51 source records per page. Their total size is not limited, so unusually large records may take longer and use more memory.
+A page query returns at most 51 source records (the limit plus one). This bounds the result, not the rows the database reads to produce it: MaEarth, for example, can scan and decode whole collections before pagination (see Query shape and performance). Returned record size is not limited, so unusually large records may take longer and use more memory.
 
 Source JSON is never returned.
 
