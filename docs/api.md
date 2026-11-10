@@ -1,10 +1,178 @@
-# MaEarth Following feed spike
+# API reference
 
-Experimental implementation of the October 14, 2026 MaEarth feed scope. This is a feasibility spike, not a production rollout or a claim of parity with MaEarth's application database.
+Both feed procedures are POST endpoints with an optional AT Protocol service-auth `Authorization` header:
+
+```text
+POST /xrpc/org.hypercerts.feed.getFeedSkeleton
+POST /xrpc/org.hypercerts.feed.getFeed
+Content-Type: application/json
+```
+
+These are app-specific XRPC procedures. They are not Bluesky's `app.bsky.feed.getFeedSkeleton` query.
+
+The procedure and JSON-body design is intentional. A Lexicon query cannot have an input body, and Lexicon's HTTP query-parameter `params` type cannot contain references, nested objects, or the open union needed for different feed algorithms to define different parameter shapes. Procedures can have both URL parameters and a body, but splitting `feedId`, `limit`, and `cursor` into the URL while putting algorithm-specific values in the body would make one feed request harder to construct and understand. Keeping the complete request in one JSON body conforms to the Lexicon specification and gives generated clients one coherent input object. It differs only from the style guide's usual `limit` and `cursor` convention for query endpoints. This transport shape is part of the public contract and should be settled before clients adopt it, because moving fields between the body and URL later would be a breaking change.
+
+## Request wrapper
+
+Both feed endpoints are POST procedures with optional AT Protocol service authentication. They use the same `{ feedId, params?, limit?, cursor? }` request wrapper, feed-scoped cursor contract, and stable public errors. `params` contains only algorithm-specific values; pagination is generic and top-level. The registered Hypercerts feed requires the Hypercerts params object and discriminator. Anonymous requests must include `params.viewerDid`; authenticated callers may omit it, and the verified JWT issuer supplies the viewer. A supplied viewer DID must match the issuer.
+
+Use the same body with `getFeedSkeleton` when another data system needs only ordered source AT-URIs. A service caller may add `-H 'authorization: Bearer <service-auth-jwt>'` and omit `viewerDid`; the token must target the bare DID configured as `SERVICE_DID`, carry the exact endpoint NSID in `lxm`, and be signed by the issuer's `#atproto` key. Invalid supplied authorization returns 401 and is never treated as anonymous. The public params union is open for future feed algorithms, including algorithms that accept no params. The Hypercerts feed requires `org.hypercerts.feed.defs#hypercertsFeedParams`; the experimental MaEarth feed, when enabled, requires `org.hypercerts.feed.defs#maearthFeedParams`; missing params or a mismatched `$type` returns `InvalidRequest`, while an unknown `feedId` returns `UnsupportedFeed`.
+
+## Responses
+
+### Skeleton
+
+```json
+{
+  "feed": [
+    {
+      "subject": "at://did:plc:ewvi7nxzyoun6zhxrhs64oiz/org.hypercerts.claim.activity/3kpn"
+    }
+  ],
+  "cursor": "eyJ2ZXJzaW9uIjoxLCJmZWVkSWQiOiJvcmcuaHlwZXJjZXJ0cy5mZWVkLmRlZnMjaHlwZXJjZXJ0c0ZlZWQiLCJ2YWx1ZSI6eyJ2YWx1ZSI6IjIwMjYtMDctMjFUMTA6MDA6MDAuMDAwMDAwWiIsInVyaSI6ImF0Oi8vZGlkOnBsYzpld3ZpN254enlvdW42emh4cmhzNjRvaXovb3JnLmh5cGVyY2VydHMuY2xhaW0uYWN0aXZpdHkvM2twbiJ9fQ"
+}
+```
+
+Each skeleton entry intentionally contains only the source record AT-URI. A downstream hydrator resolves the current indexed record version; the skeleton does not pin hydration to a CID or expose feed-specific classification metadata. Send a returned cursor back as the top-level request `cursor`, never inside algorithm-specific `params`.
+
+### Hydrated (Hypercerts feed)
+
+```json
+{
+  "feed": [
+    {
+      "subject": "at://did:plc:ewvi7nxzyoun6zhxrhs64oiz/org.hypercerts.context.evaluation/3kpn",
+      "view": {
+        "$type": "org.hypercerts.feed.defs#hypercertsFeedView",
+        "kind": "evaluation.create",
+        "actor": {
+          "did": "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
+          "displayName": "Evaluator"
+        },
+        "content": {
+          "$type": "org.hypercerts.feed.defs#evaluationView",
+          "summary": "Strong evidence",
+          "createdAt": "2026-07-21T10:00:00.000Z",
+          "target": {
+            "uri": "at://did:plc:ar7c4by46qjdydhdevvrndac/org.hypercerts.claim.activity/target",
+            "cid": "bafyreifxcn6ts5hr6oequ5w5jyrpwrdl6p5lq46jasnxmcw3h3sme6asru"
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+Every hydrated entry has a generic source `subject` and an open `view` union. The current `hypercertsFeedView` variant owns the Hypercerts event kind, actor, and kind-specific content. Clients must tolerate unknown future feed-view and content variants.
+
+### What you get
+
+Every hydrated feed entry comes from a valid source record. Each entry has a feed-specific view and kind-specific content.
+
+The service uses a meaningful, valid Certified profile for an actor's display name and avatar. If no such profile is available, the actor is represented by their DID. It does not expose stored handles or fall back to Bluesky profiles.
+
+An evaluation, measurement, or update may point to another record by its exact URI and CID. These targets remain strong references even though the entry's source `subject` is URI-only. The service checks that each target reference is valid.
+
+Clients must accept image and feed formats they do not know. Known images keep their original Hypercerts and AT Protocol formats.
+
+### What the service does not do
+
+The service removes invalid feed items and does not replace them. A page may therefore have fewer items than requested, or no items. The cursor still advances past every record the service checked.
+
+The response never contains the original source JSON. It also does not say where actor details came from.
+
+The service does not fetch, preview, or expand linked records. It only checks that the link contains a valid URI and CID.
+
+The service does not contact a PDS, AppView, or HappyView API. It does not download or proxy image files.
+
+## Request behavior and errors
+
+- Malformed JSON, missing required params, anonymous requests without `params.viewerDid`, an authenticated supplied viewer mismatch, an invalid nested `viewerDid`, params that do not match the selected feed, or structurally invalid top-level pagination return HTTP 400 with `InvalidRequest`. Semantically invalid selected-feed parameters or pagination beyond that feed's supported range return HTTP 422 with the same generic error name and an actionable message. An unregistered `feedId` returns `UnsupportedFeed`. These never become internal server errors.
+- A present `Authorization` header is always verified. Malformed, expired, not-yet-valid, wrong-audience, wrong-endpoint, unresolved-issuer, or incorrectly signed service JWTs return HTTP 401; the request is never retried anonymously. DID documents are resolved over bounded HTTPS-only requests with direct public-address pinning; `did:web` redirects and private, loopback, link-local, reserved, and special-use destinations are rejected.
+- Service-auth JWTs must include a signed, non-empty `jti` no larger than 256 UTF-8 bytes. After signature, audience, expiry, and exact endpoint checks succeed, the service accepts each issuer-and-`jti` pair once. A token is consumed before the downstream feed request runs, so retries require a fresh token even when feed generation fails. Replay state is bounded to 512 live entries per verified issuer and 4,096 live entries total, local to the running process, cleared on restart, and not shared between replicas; a full live issuer quota or global store returns HTTP 503 until entries expire. Anonymous requests remain unaffected because they do not use service-auth replay state.
+
+**Accepted pre-launch risk:** Eight verified issuers can each consume 512 live entries and fill the 4,096-entry process-wide store. While it is full, fresh valid tokens from unrelated issuers receive HTTP 503 until entries expire. The per-issuer cap does not prevent this cross-issuer denial of authenticated requests. Keep one-use tokens and fail-closed behavior for now; revisit capacity and abuse controls before relying on authenticated feed availability.
+
+Stable public feed errors:
+
+```text
+InvalidRequest
+UnsupportedFeed
+InvalidCursor
+InternalError
+```
+
+Feed-specific parameter failures use `InvalidRequest`; their message identifies the invalid parameter and how to correct it.
+
+Public errors never show SQL, database credentials, table contents, internal causes, or stack traces.
+
+## Hypercerts feed selection
+
+- The base scope always comes from the viewer's current `app.certified.graph.follow` records. The service ignores malformed follow subjects.
+- `trustedEvaluators` adds the subjects of every current, active endorsement award from each evaluator.
+- An endorsement definition with no `allowedIssuers` allows any issuer. When it is present, only its listed issuer DIDs qualify. An empty or malformed value allows no issuers.
+- The service removes the viewer. It does not query actor status; only the current follow, award, and feed records present in HappyView affect selection.
+- The organization-quality rules run against the final combined author list before event selection. Only exact `app.certified.actor.organization/self` records count as organizations.
+- Trusted quality labelers come only from the service configuration. Quality labels are current positive `happyview_labels` rows matched to a bare organization DID. `cts` and `exp` are stored as TEXT and must be complete, finite RFC3339 or legacy PostgreSQL timestamp values; `cts` is validated but not used for ordering, and `exp` is validated before casting. Malformed, date-only, nonfinite, or elapsed values are inactive. HappyView removes a matching row when it receives a negation, and the table has no label CID or history. A row proves only that HappyView currently projects that label, not that every label was ingested. Callers cannot choose label sources.
+- Leaving out `kinds`, or passing an empty list, includes every supported kind. Unknown kinds are rejected as `InvalidRequest`.
+
+Supported event kinds:
+
+```text
+cert.create
+collection.create
+project.created_with_cert
+evaluation.create
+measurement.create
+update.create
+endorsement.award
+```
+
+Project and activity records are combined before kind filtering and pagination. After a collection is returned as `project.created_with_cert`, its paired activity cannot appear on a later page.
+
+## Ordering and pagination
+
+The order is:
+
+```text
+feed timestamp DESC, record URI DESC
+```
+
+Entries appear newest first using an internal feed timestamp. HappyView stores record JSON and `indexed_at` as TEXT; the query validates JSON and timestamp text before casting, falls back from an invalid or absent `createdAt` to a finite, complete `indexed_at` in RFC3339 or legacy PostgreSQL format, and compares timestamps chronologically rather than lexically. Date-only and nonfinite fallback values are rejected. HappyView's `created_at` is row-ingestion time and is not used for feed ordering. Invalid source JSON does not abort selection; hydration drops an invalid selected source without backfilling. The Hypercerts feed does not expose its effective timestamp in either response; the experimental MaEarth feed returns its effective sort timestamp as `createdAt` in its `getFeed` view only, bounded to years 0001 through 9999 UTC, and hides rows dated more than five minutes after the database's statement time; the Hypercerts feed applies no such cutoff. Pagination moves forward from the last source row chosen before hydration, so removing an invalid hydrated entry does not move the cursor.
+
+### Pages and database reads
+
+**Pages**
+
+- The service checks one extra item to see whether another page exists.
+- The cursor marks the last item selected and is valid only for the `feedId` that issued it.
+- Both endpoints use the same top-level pagination, ordering, and feed-scoped cursor rules.
+- Invalid hydrated entries are removed, not replaced.
+
+**Database work**
+
+- A skeleton page uses one database query.
+- A full feed page also loads actor and profile details when it has valid entries.
+- The service never makes extra queries to fill gaps left by invalid entries.
+
+**Freshness**
+
+Feed entries and their source records are read together. Actor and profile details are loaded afterward, so they may be newer.
+
+Each page is a separate database read. Changes made between requests may appear on later pages.
+
+**Record size**
+
+The service reads at most 51 source records per page. Their total size is not limited, so unusually large records may take longer and use more memory.
+
+Source JSON is never returned.
+
+## MaEarth Following feed (experimental)
 
 The feed is **off by default**. Set `MAEARTH_FEED_ENABLED=true` to register it. When it is `false`, unset or empty, the `feedId` is unregistered and a well-formed request returns `UnsupportedFeed` (a malformed one, such as an anonymous request without `viewerDid`, is still rejected earlier as `InvalidRequest`); a value other than `true` or `false` fails startup with an actionable error. HappyView must have the `org.hypercerts.context.attachment`, `app.certified.graph.follow`, `app.certified.graph.entityFollow`, `app.certified.feed.repost` and `org.hypercerts.collection` lexicons installed, subscribed and backfilled; otherwise those kinds silently return nothing and `GET /ready` will not say so (see [database-contract.md](database-contract.md#experimental-maearth-selection)).
 
-## Contract
+### Contract
 
 Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params with `$type: org.hypercerts.feed.defs#maearthFeedParams`:
 
@@ -89,83 +257,20 @@ One parameterized statement handles scope, selection and pagination for either e
 - The `kinds` filter is applied before any record is read: a single-kind request reads only that kind's collection (plus the viewer's graph and project lookups).
 - Authored follow items must also resolve their project target, by one primary-key lookup per candidate.
 
-The planner decides the physical plan. This spike has **no `EXPLAIN (ANALYZE, BUFFERS)` evidence on production-shaped data**, so no latency or capacity claim is made. Before any shared deployment, capture it against a copy with production-like row counts, large attachments, and the deployment's own `jit` setting. A local synthetic check suggests the estimated cost of this statement can exceed PostgreSQL's default `jit_above_cost`, in which case JIT compilation, not row processing, can dominate; confirm and, if needed, disable JIT for the feed's read-only role. The service never creates indexes: if the target-driven scans prove too costly, the follow-up is a HappyView-owned index or projection (for example by follow subject or by attachment subject), not a change here.
+The planner decides the physical plan. There is **no `EXPLAIN (ANALYZE, BUFFERS)` evidence on production-shaped data**, so no latency or capacity claim is made. Before any shared deployment, capture it against a copy with production-like row counts, large attachments, and the deployment's own `jit` setting. A local synthetic check suggests the estimated cost of this statement can exceed PostgreSQL's default `jit_above_cost`, in which case JIT compilation, not row processing, can dominate; confirm and, if needed, disable JIT for the feed's read-only role. The service never creates indexes: if the target-driven scans prove too costly, the follow-up is a HappyView-owned index or projection (for example by follow subject or by attachment subject), not a change here.
 
 ### Known limitations
 
 - **Author-controlled timestamps within the skew.** Far-future items can no longer pin themselves to the top, but an item may still claim any time up to five minutes ahead of the database clock, and a backdated `createdAt` sorts wherever its author says. MaEarth merges by `createdAt`, so such an item can briefly float above its own gifts. Target-driven rows keep this open to any account that follows a followed account or project, or posts about a followed project. (Any account can likewise place a post about any project into its followers' feeds; MaEarth's own visibility filtering is the control.) Only the database clock is read. The five-minute skew assumes it is reasonably accurate; a database clock running more than that behind its writers would hide valid items.
-- **The Hypercerts feed still has the far-future exposure.** `src/feed/feed-query.sql` accepts any valid in-range `createdAt`, including 2099, so a far-future item pins to the top of that feed until removed. This change does not touch it. Follow-up: decide whether the Hypercerts feed should adopt the same cutoff, which would change its public ordering semantics and its tests.
+- **The Hypercerts feed still has the far-future exposure.** `src/feed/feed-query.sql` accepts any valid in-range `createdAt`, including 2099, so a far-future item pins to the top of that feed until removed. Open question: decide whether the Hypercerts feed should adopt the same cutoff, which would change its public ordering semantics and its tests.
 - `actorDid` only narrows the viewer's Following scope; it cannot serve a public profile page for someone the viewer does not follow.
 
-## Local Docker validation
-
-Prerequisites: Docker Compose, local npm dependencies, and a read-only `../hypercerts-api` checkout with its pinned dependencies installed. **Both the feed tree and the API tree must be clean** (no uncommitted or untracked changes), because the recorded HEAD SHAs are only meaningful when they describe the content that was built and mounted; commit or stash local feed changes before a provenance run. The harness mounts the API checkout read-only and uses its actual `api/manifest.json` and maintained `install:api` CLI; it installs every declared Lexicon and Lua script, not just record schemas. The installer runs only against this fresh disposable HappyView instance and **does not publish schemas to ATProto**. Record ingestion is real HappyView validation and persistence over a local mock Jetstream, not direct SQL inserts. The feed container is started with `MAEARTH_FEED_ENABLED=true`. The evidence records both HEAD SHAs and, independently of Git, the SHA-256 of the mounted `api/manifest.json`.
-
-Run from this repository:
-
-```sh
-test -z "$(git status --porcelain)" ||
-  { echo 'Feed tree is not clean; commit or stash first' >&2; exit 1; }
-test -z "$(git -C ../hypercerts-api status --porcelain)" ||
-  { echo 'API tree is not clean; use a clean checkout' >&2; exit 1; }
-export SPIKE_DIR=$(mktemp -d /tmp/maearth-full-api.XXXXXX)
-export COMPOSE_PROJECT_NAME=maearth-full-api-$(date +%s)-$$
-export HYPERCERTS_API_DIR=$(realpath ../hypercerts-api)
-export SPIKE_API_SHA=$(git -C "$HYPERCERTS_API_DIR" rev-parse HEAD)
-export SPIKE_FEED_SHA=$(git rev-parse HEAD)
-node scripts/maearth-spike/prepare-env.mjs "$SPIKE_DIR/stack.env"
-dc() {
-  docker compose --env-file "$SPIKE_DIR/stack.env" \
-    -p "$COMPOSE_PROJECT_NAME" -f scripts/maearth-spike/compose.yaml "$@"
-}
-dc up -d --build
-dc exec -T validation node scripts/maearth-spike/validate.mjs
-dc exec -T validation ./node_modules/.bin/vitest run test/maearth.integration.test.ts
-docker cp "$(dc ps -q validation):/tmp/maearth-evidence.json" "$SPIKE_DIR/evidence.json"
-docker cp "$(dc ps -q validation):/tmp/maearth-install-installer.stdout.json" "$SPIKE_DIR/installer-install.json"
-docker cp "$(dc ps -q validation):/tmp/maearth-install-installer.stderr.log" "$SPIKE_DIR/installer-install.log"
-docker cp "$(dc ps -q validation):/tmp/maearth-readback-installer.stdout.json" "$SPIKE_DIR/installer-readback.json"
-docker cp "$(dc ps -q validation):/tmp/maearth-readback-installer.stderr.log" "$SPIKE_DIR/installer-readback.log"
-dc port gateway 3000
-```
-
-`validate.mjs` refuses a nonempty record database. Run it once per fresh project. It creates a disposable installer user (a HappyView super user, which owns the key) and an API key limited to the API installer's required permissions, plus a separate SELECT-only feed login with read-only sessions. Only `PATH` and the installer's own variables are passed to the third-party installer process; stack credentials are not. The validation container shares HappyView's network namespace so the maintained installer's loopback-only HTTP policy can use `http://localhost:3000`; it invokes the CLI to install the entire bundle and then read back every declared asset. Evidence includes manifest counts and asset IDs, the API manifest SHA-256, installer output, source SHAs, schema inspection, ingested record CIDs, executed API endpoints, and feed assertions; it contains no stack credentials. HappyView itself applies its migrations. The installer creates the handle-resolver setting, but the endpoint checks do not invoke handle lookup. The feed may initially report not-ready until setup creates its login. Do not point these helpers at an existing HappyView installation.
-
-The PostgreSQL data directory is tmpfs, not durable. HappyView, PostgreSQL, feed, mocks and validation runner use an internal network without Internet egress. The validation container shares HappyView's network namespace; a separate TCP gateway publishes only the feed on a random **loopback** port. Admin/database/mock published-port declarations are not reachable on Docker Desktop's internal network; use container exec. The gateway has a second bridge network for host access. No remote relay, PDS, DID resolver or labeler is contacted by the validation checks. Image pulls and npm installation happen during builds, before runtime network isolation.
-
-After `dc port gateway 3000`, substitute that port below:
-
-```sh
-curl -sS http://127.0.0.1:PORT/xrpc/org.hypercerts.feed.getFeed \
-  -H 'content-type: application/json' \
-  -d '{"feedId":"org.hypercerts.feed.defs#maearthFeed","params":{"$type":"org.hypercerts.feed.defs#maearthFeedParams","viewerDid":"did:plc:cccccccccccccccccccccccc"},"limit":2}'
-```
-
-The validator checks 18 real ingested source records (including a project-type collection, a favorites-type collection, an activity-only post, and entity follows of a favorites collection and of a never-stored collection), confirms each stored CID equals the validator-computed CID it sent, then executes installed API Lua endpoints `app.certified.graph.getFollows`, `app.certified.graph.getEntityFollows`, `org.hypercerts.context.getAttachment`, `org.hypercerts.context.listAttachments`, and `app.certified.feed.getReposts` against those same records. It also checks both feed endpoints, all four MaEarth kinds, matching skeleton/view cursors, pagination, actor/kind filters, and update/delete/unfollow effects across API and feed responses. It restores the demonstration records after mutation checks. The focused MaEarth PostgreSQL suite uses a session-local temporary table for malformed JSON/timestamps, fallback ordering, timestamp bounds, feed-scoped cursors, project resolution, mediated follows, and a 505-account graph; those SQL fixtures are not claimed as valid ingested records. `validate.mjs` also asserts the follow targets on every ingested follow item and their absence on posts and reposts. The harness has not been re-run since the project-resolution fixtures or the follow-target assertions were added; treat its updated expectations as unverified until it is. Its fixtures use a past `createdAt`, so the future-dated cutoff does not affect it.
-
-The harness leaves its containers and evidence available for inspection. When explicitly choosing to discard the disposable data, `dc down` removes only that project; do not use global Docker cleanup commands. Keep `$SPIKE_DIR/stack.env` until teardown, and do not commit it.
-
-## Not covered
+### Not covered
 
 - Gifts, donation rollups, For you discovery/fallback, funding rounds and unrestricted public profile feeds.
 - MaEarth privacy, mutes, hidden posts, public-profile eligibility for reposts, announcements, organization/person distinctions, and attachment-to-project mapping. These require MaEarth's database; inclusion here does not imply visibility there.
 - Reaction counts, viewer reactions, follower totals or Follow-button state.
 - Production scale or latency guarantees. The 505-account check proves no truncation, not performance.
-- Live PDS-issued JWTs and public DID resolution. Viewer binding is unit-tested; local HTTP validation is anonymous.
+- Live PDS-issued JWTs and public DID resolution. Viewer binding is unit-tested only.
 - Labels and moderation ingestion. MaEarth selection does not consume organization quality labels.
 - A single cursor merging gifts with ATProto records: MaEarth still owns that merge and needs its own composite pagination strategy. Returning timestamps alone does not solve cross-source pagination.
-
-## Open questions and before production
-
-Open questions for MaEarth and the feed owners:
-
-- Whether the skeleton may also carry `createdAt`, instead of MaEarth calling `getFeed` for merge metadata. The spike answers by keeping the skeleton URI-only.
-- Whether `actorDid` must serve unrestricted profile pages.
-
-Resolved:
-
-- MaEarth projects are `org.hypercerts.collection` records with `type` `'project'`; matching a followed project's collection URI or the activity URIs in its `items[]` is sufficient (see Selection).
-- Follow items name their target through `followedProjectUri` and `followedDid`, so MaEarth needs no per-item record lookup (see Contract).
-- Far-future `createdAt` values are hidden by a five-minute skew cutoff (see Selection).
-
-Before production: agree on the public schema, confirm actual MaEarth record shapes, test a privacy-aware consumer and gift-merge pagination, confirm HappyView has all five lexicons installed, subscribed and backfilled, and measure SQL plans on production-shaped data (see Query shape and performance). The feed is read-only and does not own migrations or indexes.

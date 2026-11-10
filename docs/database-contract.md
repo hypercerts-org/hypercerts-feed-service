@@ -52,7 +52,7 @@ Before configuring `DATABASE_URL`, verify using that login that it can connect, 
 
 Feed selection reads current rows from `happyview_records`. The service does not query PDS, AppView, HappyView APIs, or actor-status tables. A missing source row produces no feed event; there is no history or snapshot guarantee across requests.
 
-The supported source collections are listed below. `app.certified.graph.entityFollow` and `app.certified.feed.repost` are read only by the experimental MaEarth feed (see [MaEarth spike](maearth-spike.md)). MaEarth also reads `app.certified.graph.follow`, `org.hypercerts.context.attachment` and `org.hypercerts.collection`, which the Hypercerts feed uses too; the remaining collections serve only the Hypercerts feed.
+The supported source collections are listed below. `app.certified.graph.entityFollow` and `app.certified.feed.repost` are read only by the experimental MaEarth feed (see [the MaEarth section of the API reference](api.md#maearth-following-feed-experimental)). MaEarth also reads `app.certified.graph.follow`, `org.hypercerts.context.attachment` and `org.hypercerts.collection`, which the Hypercerts feed uses too; the remaining collections serve only the Hypercerts feed.
 
 ```text
 app.certified.graph.follow
@@ -107,7 +107,7 @@ Read rules specific to this feed:
 - **Timestamps.** The effective timestamp must be 0001-01-01T00:00:00Z or later. An unparseable `createdAt`, or one before year 1 in UTC, falls back to `indexed_at` under the same guards; if that is also before year 1 or invalid the row is excluded. A row whose effective timestamp is later than the database's `statement_timestamp()` plus five minutes is excluded and never re-dated, so returned values never exceed year 9999: a `createdAt` that parses as a real future timestamp, including one beyond year 9999 after its offset, does not fall back to `indexed_at`. The Hypercerts feed applies no such cutoff.
 - **Repost targets.** A repost's `subject.uri` must be an `org.hypercerts.context.attachment` AT-URI that passes output validation: a record key of 1–512 characters that is neither `.` nor `..`, and an authority DID of at most 2048 characters. Its `subject.cid` must be a non-empty string. Other reposts are excluded, so a malformed target cannot fail a page.
 - **Follow targets.** `projectFollow` rows return the followed project URI (the `subject.uri` that resolved to a project) and `accountFollow` rows the followed DID (the follow `subject`), both from the records already read. A follow `subject` longer than 2048 characters is not a DID and is excluded.
-- **Reads.** Author-driven rows are read by `(did, collection)`; target-driven rows (strangers' follows of followed accounts or projects, and posts about followed projects) scan the selected collections. See [MaEarth spike](maearth-spike.md#query-shape-and-performance) for limits. The service creates no indexes.
+- **Reads.** Author-driven rows are read by `(did, collection)`; target-driven rows (strangers' follows of followed accounts or projects, and posts about followed projects) scan the selected collections. See [MaEarth query shape](api.md#query-shape-and-performance) for limits. The service creates no indexes.
 
 ## Organization-quality labels
 
