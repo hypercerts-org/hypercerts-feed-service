@@ -170,3 +170,9 @@ Integration tests need a disposable PostgreSQL database: `TEST_DATABASE_URL='pos
 - [Development](docs/development.md)
 - [Database contract](docs/database-contract.md)
 - [Releasing](docs/RELEASING.md)
+
+## License
+
+Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+Lexicon schemas copied from other publishers (`app.bsky` and `com.atproto`, from Bluesky) keep their publishers' licenses.
