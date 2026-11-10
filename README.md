@@ -4,6 +4,14 @@ A read-only service that serves Hypercerts activity feeds over XRPC. It reads th
 
 It does not ingest or write records, call PDS or AppView APIs, or keep history. Results reflect HappyView's current data.
 
+## Hosted instances
+
+| Environment | URL                                |
+| ----------- | ---------------------------------- |
+| Production  | `https://feed.hypercerts.dev`      |
+| Staging     | `https://dev.feed.hypercerts.dev`  |
+| Test        | `https://test.feed.hypercerts.dev` |
+
 ## Endpoints
 
 | Route                                            | Purpose                                                                            |
