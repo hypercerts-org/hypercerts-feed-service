@@ -92,7 +92,8 @@ params: {
 
 - Posts are `org.hypercerts.context.attachment` records.
 - Projects are `org.hypercerts.collection` records of type `project`.
-- A repost appears only if the reposter is the viewer or someone the viewer follows.
+- A repost appears only if the reposter is someone the viewer follows. The viewer's own reposts never appear.
+- The service does not apply MaEarth's privacy or hidden-post rules. MaEarth must filter items before showing them.
 
 ### Example
 
@@ -115,13 +116,14 @@ With a valid token you can omit `viewerDid`. If you do send one, it must match t
 
 ## Errors
 
-| Status | Error             | Cause                                                                                  |
-| ------ | ----------------- | -------------------------------------------------------------------------------------- |
-| 400    | `InvalidRequest`  | Malformed body, missing `params` or `$type`, or no `viewerDid` on an anonymous request |
-| 422    | `InvalidRequest`  | Unknown `kinds` value, or `limit` outside 1–50                                         |
-| 400    | `UnsupportedFeed` | `feedId` is not enabled on that host                                                   |
-| 401    | —                 | Invalid, expired or reused service JWT; never falls back to anonymous                  |
-| 503    | —                 | Service-auth replay store is full; retry later                                         |
+| Status | Error             | Cause                                                                                   |
+| ------ | ----------------- | --------------------------------------------------------------------------------------- |
+| 400    | `InvalidRequest`  | Malformed body, missing `params` or `$type`, or no `viewerDid` on an anonymous request  |
+| 422    | `InvalidRequest`  | Unknown `kinds` value, or `limit` outside 1–50                                          |
+| 400    | `UnsupportedFeed` | `feedId` is not enabled on that host                                                    |
+| 400    | `InvalidCursor`   | Malformed cursor, or one from another feed. Discard it and request the first page again |
+| 401    | —                 | Invalid, expired or reused service JWT; never falls back to anonymous                   |
+| 503    | —                 | Service-auth replay store is full; retry later                                          |
 
 ## Pitfalls
 
@@ -129,11 +131,12 @@ With a valid token you can omit `viewerDid`. If you do send one, it must match t
 - A `getFeed` page can be shorter than `limit`, or empty, and still return a cursor. Invalid source records are dropped without being replaced, so keep paging.
 - Results reflect the current state, not history. Deleted records leave the feed within seconds, and pages fetched at different times may shift.
 - On the MaEarth feed, items dated more than 5 minutes in the future are hidden. A record without `createdAt` is dated by when the indexer stored it.
-- Only the MaEarth feed returns timestamps. Neither feed has a kind for likes.
+- Only the MaEarth feed returns the timestamp items are sorted by. Hypercerts views can still include the record's own `content.createdAt`.
+- Neither feed has a kind for likes.
 
 ## Checking a feed works
 
-1. Send the same body to `getFeedSkeleton` and `getFeed`. Both should return the same subject URIs in the same order, with the same cursor.
-2. Page to the end. There should be no duplicate subjects, and MaEarth `createdAt` values should never increase.
+1. Send the same body to `getFeedSkeleton` and `getFeed`. The `getFeed` subjects should be the skeleton's subjects in the same order, minus any invalid records it dropped. The MaEarth feed drops nothing, so its lists should match exactly. Data can change between the two requests, so retry before treating a difference as a bug.
+2. Page to the end. MaEarth `createdAt` values should never increase. Records can change while you page, so a duplicate subject is a bug only if it repeats when the data is not changing.
 3. Filter by one kind. Only that kind should come back, and `kinds: ["bogus"]` should return 422.
-4. To measure speed, create a record from an account the viewer follows and poll `getFeed` every 1–2 seconds. Compare the time the record first appears with the time in its record key. Decode the key as base32, using the alphabet `234567abcdefghijklmnopqrstuvwxyz`; shifting the value right by 10 bits gives microseconds since the Unix epoch. On 2026-11-10, new reposts appeared in about 2 seconds on dev and 3 seconds on production.
+4. To measure speed, note the time on your own machine when you write the record, from an account the viewer follows. Poll `getFeed` every 1–2 seconds and compare that time with when the record first appears. Don't rely on the record key, which doesn't always contain a timestamp. On 2026-11-10, new reposts appeared in about 2 seconds on dev and 3 seconds on production.
