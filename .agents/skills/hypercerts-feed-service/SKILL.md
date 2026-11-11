@@ -1,6 +1,7 @@
 ---
 name: hypercerts-feed-service
 description: Call the Hypercerts Feed Service (feed.hypercerts.dev, dev.feed.hypercerts.dev). Covers the org.hypercerts.feed.getFeed and getFeedSkeleton POST procedures, the hypercertsFeed and maearthFeed feed IDs, params (viewerDid, kinds, actorDid, trustedEvaluators, organizationQuality), cursor paging, UnsupportedFeed and InvalidRequest errors, the MaEarth Following feed (post, projectFollow, accountFollow, repost), and checking that a feed works or how fast new records appear.
+license: MIT OR Apache-2.0
 ---
 
 # Hypercerts Feed Service
