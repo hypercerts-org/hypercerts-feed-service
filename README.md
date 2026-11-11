@@ -170,3 +170,9 @@ Integration tests need a disposable PostgreSQL database: `TEST_DATABASE_URL='pos
 - [Development](docs/development.md)
 - [Database contract](docs/database-contract.md)
 - [Releasing](docs/RELEASING.md)
+
+## License
+
+Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+The `app.bsky` Lexicon schemas in `lexicons/app/` come from Bluesky's [bsky](https://github.com/bluesky-social/bsky) repository, and the `com.atproto` schemas in `lexicons/com/` from its [atproto](https://github.com/bluesky-social/atproto) repository. These schemas keep their upstream license: MIT or Apache-2.0, Copyright (c) 2022-2026 Bluesky Social PBC, and Contributors.
