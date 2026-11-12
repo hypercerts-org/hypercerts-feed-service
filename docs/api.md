@@ -196,6 +196,8 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
         "$type": "org.hypercerts.feed.defs#maearthFeedView",
         "kind": "repost",
         "createdAt": "2026-10-14T12:00:00.123456Z",
+        "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
+        "actorDid": "did:plc:dddddddddddddddddddddddd",
         "repostedPostUri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.context.attachment/original"
       }
     },
@@ -205,6 +207,8 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
         "$type": "org.hypercerts.feed.defs#maearthFeedView",
         "kind": "projectFollow",
         "createdAt": "2026-10-14T11:59:00.000000Z",
+        "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
+        "actorDid": "did:plc:cccccccccccccccccccccccc",
         "followedProjectUri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.collection/project"
       }
     },
@@ -214,6 +218,8 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
         "$type": "org.hypercerts.feed.defs#maearthFeedView",
         "kind": "accountFollow",
         "createdAt": "2026-10-14T11:58:00.000000Z",
+        "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
+        "actorDid": "did:plc:cccccccccccccccccccccccc",
         "followedDid": "did:plc:dddddddddddddddddddddddd"
       }
     }
@@ -223,7 +229,9 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
 
 `subject` identifies the item's own record, not its target. `createdAt` is the **effective sort timestamp** (validated source `createdAt`, otherwise valid HappyView `indexed_at`), normalized to UTC with microseconds. It is not necessarily the literal source field. Repost targets are not fetched, and their existence is not required. MaEarth can drop invisible entries, but must keep advancing the returned cursor, even for an empty visible page.
 
-**Follow targets.** A `projectFollow` carries `followedProjectUri`, the followed `org.hypercerts.collection` URI that resolved to a `type` of `project`. An `accountFollow` carries `followedDid`, the DID in the follow record's subject. Each is absent for every other kind, and no kind carries a follower field: the follower is the authority of the item's `subject` URI. Both values come from the same statement and the same records already read to select the item, so they add no query or read. They are not cross-checked against the requester: a stranger's follow of a followed account names that followed account, and a followed account's follow names whomever it followed. The skeleton does not carry them. The fields are optional additions to the open view, so existing consumers are unaffected.
+**Record identity.** Every item carries `cid`, the CID of its own record (the `subject`), and `actorDid`, the record's author: the poster, follower or reposter, which is always the authority of `subject`. Both come from the record row the statement already selected, so they add no query or read.
+
+**Follow targets.** A `projectFollow` carries `followedProjectUri`, the followed `org.hypercerts.collection` URI that resolved to a `type` of `project`. An `accountFollow` carries `followedDid`, the DID in the follow record's subject. Each is absent for every other kind, and the follower is the item's `actorDid`, the authority of its `subject` URI. Both values come from the same statement and the same records already read to select the item, so they add no query or read. They are not cross-checked against the requester: a stranger's follow of a followed account names that followed account, and a followed account's follow names whomever it followed. The skeleton does not carry them. The fields are optional additions to the open view, so existing consumers are unaffected.
 
 ### Selection
 

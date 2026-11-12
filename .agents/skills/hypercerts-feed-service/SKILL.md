@@ -75,7 +75,7 @@ params: {
 }
 ```
 
-`getFeed` items carry metadata only. There is no actor or content, because MaEarth hydrates items itself:
+`getFeed` items carry metadata only. There is no hydrated actor profile or content, because MaEarth hydrates items itself:
 
 ```ts
 {
@@ -84,6 +84,8 @@ params: {
     $type: 'org.hypercerts.feed.defs#maearthFeedView',
     kind,
     createdAt,
+    cid, // the item record's CID
+    actorDid, // the item record's author (subject URI authority)
     repostedPostUri?, // repost only
     followedProjectUri?, // projectFollow only
     followedDid?, // accountFollow only
