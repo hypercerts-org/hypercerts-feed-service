@@ -201,6 +201,8 @@ export const createMaearthFeed = (
         $type: 'org.hypercerts.feed.defs#maearthFeedView',
         kind: row.kind,
         createdAt: row.sort_value,
+        cid: row.cid,
+        actorDid: row.actor_did,
         ...target,
       }
       return { ...metadata, sourceValue: view }
@@ -226,6 +228,8 @@ export class MaearthFeedService {
         $type: 'org.hypercerts.feed.defs#maearthFeedView',
         kind: parsed.kind,
         createdAt: parsed.createdAt,
+        cid: parsed.cid,
+        actorDid: parsed.actorDid,
         ...(parsed.repostedPostUri === undefined
           ? {}
           : { repostedPostUri: parsed.repostedPostUri }),

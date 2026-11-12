@@ -27,7 +27,7 @@
     },
     "maearthFeedView": {
       "type": "object",
-      "required": ["kind", "createdAt"],
+      "required": ["kind", "createdAt", "cid", "actorDid"],
       "description": "Experimental merge metadata, not hydrated content. createdAt is the effective SQL sort timestamp, including indexed_at fallback; items dated more than five minutes after the database's statement time are not returned. MaEarth must apply privacy and content filtering.",
       "properties": {
         "kind": {
@@ -36,6 +36,16 @@
           "knownValues": ["post", "projectFollow", "accountFollow", "repost"]
         },
         "createdAt": { "type": "string", "format": "datetime" },
+        "cid": {
+          "type": "string",
+          "format": "cid",
+          "description": "CID of the item's own record, the entry's subject URI. Present for every kind."
+        },
+        "actorDid": {
+          "type": "string",
+          "format": "did",
+          "description": "DID of the item's record author (the poster, follower or reposter), which is the authority of the entry's subject URI. Present for every kind."
+        },
         "repostedPostUri": {
           "type": "string",
           "format": "at-uri",

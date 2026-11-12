@@ -25,9 +25,11 @@ const setup = () => {
   return { query, pages, service: new MaearthFeedService(pages) }
 }
 
+const recordCid = 'bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u'
+
 const repostRow = (overrides: Record<string, unknown> = {}) => ({
   uri: `at://${viewerDid}/app.certified.feed.repost/one`,
-  cid: 'internal-cid',
+  cid: recordCid,
   collection: 'app.certified.feed.repost',
   actor_did: viewerDid,
   kind: 'repost',
@@ -211,11 +213,27 @@ describe('MaEarth feed query contract', () => {
     ).rejects.toThrow(/MaEarth query metadata is incomplete/)
   })
 
+  it.each([
+    ['a malformed record CID', { cid: 'not-a-cid' }],
+    ['a malformed actor DID', { actor_did: 'not-a-did' }],
+  ])('rejects a getFeed view with %s', async (_label, patch) => {
+    const { query, service } = setup()
+    query.mockResolvedValue({ rows: [repostRow(patch)] })
+    await expect(service.getFeed(request)).rejects.toThrow()
+  })
+
   it('returns each follow kind with only its own target and keeps targets out of the skeleton', async () => {
     const { query, pages, service } = setup()
+    const otherCid =
+      'bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm'
     const rows = [
       projectFollowRow(),
-      accountFollowRow(),
+      accountFollowRow({
+        uri: `at://${followedDid}/app.certified.graph.follow/one`,
+        cid: otherCid,
+        actor_did: followedDid,
+        followed_did: viewerDid,
+      }),
       repostRow(),
       repostRow({
         uri: `at://${viewerDid}/org.hypercerts.context.attachment/post`,
@@ -234,6 +252,8 @@ describe('MaEarth feed query contract', () => {
           $type: viewType,
           kind: 'projectFollow',
           createdAt,
+          cid: recordCid,
+          actorDid: viewerDid,
           followedProjectUri: followedProject,
         },
       },
@@ -243,7 +263,9 @@ describe('MaEarth feed query contract', () => {
           $type: viewType,
           kind: 'accountFollow',
           createdAt,
-          followedDid,
+          cid: otherCid,
+          actorDid: followedDid,
+          followedDid: viewerDid,
         },
       },
       {
@@ -252,12 +274,20 @@ describe('MaEarth feed query contract', () => {
           $type: viewType,
           kind: 'repost',
           createdAt,
+          cid: recordCid,
+          actorDid: viewerDid,
           repostedPostUri: rows[2]?.reposted_post_uri,
         },
       },
       {
         subject: rows[3]?.uri,
-        view: { $type: viewType, kind: 'post', createdAt },
+        view: {
+          $type: viewType,
+          kind: 'post',
+          createdAt,
+          cid: recordCid,
+          actorDid: viewerDid,
+        },
       },
     ])
     expect(await new FeedService(pages).getFeedSkeleton(request)).toEqual({
