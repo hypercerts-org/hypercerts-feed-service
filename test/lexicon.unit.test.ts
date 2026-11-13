@@ -633,12 +633,12 @@ describe('MaEarth feed Lexicon contract', () => {
     expect(() =>
       maearthFeedView.schema.$parse({ $type: viewType, kind: 'post' }),
     ).toThrow()
-    // cid and actorDid are present for every kind.
+    // cid and actorDid are optional.
     for (const missing of ['cid', 'actorDid'] as const) {
       const { [missing]: _omitted, ...rest } = base
       expect(() =>
         maearthFeedView.schema.$parse({ ...rest, kind: 'post' }),
-      ).toThrow()
+      ).not.toThrow()
     }
     expect(() =>
       maearthFeedView.schema.$parse({

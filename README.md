@@ -125,7 +125,7 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
 }
 ```
 
-Every item carries its record `cid` and author `actorDid`. Project follows carry `followedProjectUri`, and account follows carry `followedDid`.
+Items carry their record `cid` and author `actorDid` (both optional in the Lexicon). Project follows carry `followedProjectUri`, and account follows carry `followedDid`.
 
 Full request rules, selection, errors, and pagination: [docs/api.md](docs/api.md).
 

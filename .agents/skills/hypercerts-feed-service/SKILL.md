@@ -84,8 +84,8 @@ params: {
     $type: 'org.hypercerts.feed.defs#maearthFeedView',
     kind,
     createdAt,
-    cid, // the item record's CID
-    actorDid, // the item record's author (subject URI authority)
+    cid, // the item record's CID (optional)
+    actorDid, // the item record's author (optional)
     repostedPostUri?, // repost only
     followedProjectUri?, // projectFollow only
     followedDid?, // accountFollow only

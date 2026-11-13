@@ -228,8 +228,8 @@ export class MaearthFeedService {
         $type: 'org.hypercerts.feed.defs#maearthFeedView',
         kind: parsed.kind,
         createdAt: parsed.createdAt,
-        cid: parsed.cid,
-        actorDid: parsed.actorDid,
+        ...(parsed.cid === undefined ? {} : { cid: parsed.cid }),
+        ...(parsed.actorDid === undefined ? {} : { actorDid: parsed.actorDid }),
         ...(parsed.repostedPostUri === undefined
           ? {}
           : { repostedPostUri: parsed.repostedPostUri }),
