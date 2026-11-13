@@ -1,5 +1,17 @@
 # @hypercerts/hypercerts-feed-service
 
+## 1.0.0
+
+### Major Changes
+
+- [#32](https://github.com/hypercerts-org/hypercerts-feed-service/pull/32) [`4f91517`](https://github.com/hypercerts-org/hypercerts-feed-service/commit/4f915179597e61984212abb4151e57a2fb5817cd) Thanks [@Kzoeps](https://github.com/Kzoeps)! - Read feed records, labels, and Certified profiles directly from HappyView PostgreSQL. Feed timestamps use valid record `createdAt` with `indexed_at` fallback; organization quality uses HappyView's current positive label projection. Remove the Hyperboard kind and legacy handle/Bluesky identity fallbacks.
+
+### Minor Changes
+
+- [#39](https://github.com/hypercerts-org/hypercerts-feed-service/pull/39) [`fc57a67`](https://github.com/hypercerts-org/hypercerts-feed-service/commit/fc57a6721a11a633a605680ea0259031ab5a7ffb) Thanks [@Kzoeps](https://github.com/Kzoeps)! - - MaEarth `getFeed` items now include optional `cid` (the item record's CID) and `actorDid` (the record's author), set for every kind.
+
+- [#35](https://github.com/hypercerts-org/hypercerts-feed-service/pull/35) [`abf9fef`](https://github.com/hypercerts-org/hypercerts-feed-service/commit/abf9fef011ef80c392622753ae4c64e70cabec40) Thanks [@Kzoeps](https://github.com/Kzoeps)! - Add an experimental MaEarth Following feed, registered only when `MAEARTH_FEED_ENABLED=true` (default off), with viewer-scoped posts, project/account follows, and reposts. The existing getFeed endpoint returns a MaEarth merge-metadata view with the effective sort timestamp, the repost target for reposts, the followed project URI for project follows, and the followed DID for account follows; skeleton items remain URI-only. Items dated more than five minutes after the database's statement time are hidden. MaEarth retains content hydration, privacy filtering, discovery, and gift merging.
+
 ## 0.2.0
 
 ### Minor Changes
