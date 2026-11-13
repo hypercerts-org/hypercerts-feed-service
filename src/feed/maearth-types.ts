@@ -24,6 +24,10 @@ export interface MaearthFeedView {
   readonly $type: 'org.hypercerts.feed.defs#maearthFeedView'
   readonly kind: MaearthKind
   readonly createdAt: string
+  /** CID of the item's own record (the entry's subject). */
+  readonly cid?: string
+  /** The item record's author: the subject URI's authority. */
+  readonly actorDid?: string
   readonly repostedPostUri?: string
   /** The followed project's collection URI; present only for `projectFollow`. */
   readonly followedProjectUri?: string

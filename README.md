@@ -115,6 +115,8 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
         "$type": "org.hypercerts.feed.defs#maearthFeedView",
         "kind": "repost",
         "createdAt": "2026-11-10T07:03:34.692000Z",
+        "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
+        "actorDid": "did:plc:bqkfguw3v76x5arrun2vybp2",
         "repostedPostUri": "at://did:plc:uuvfp7xadcud56pjxbka26lc/org.hypercerts.context.attachment/3mxbyjkmrkk2u"
       }
     }
@@ -123,7 +125,7 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
 }
 ```
 
-Project follows carry `followedProjectUri`, and account follows carry `followedDid`.
+Items carry their record `cid` and author `actorDid` (both optional in the Lexicon). Project follows carry `followedProjectUri`, and account follows carry `followedDid`.
 
 Full request rules, selection, errors, and pagination: [docs/api.md](docs/api.md).
 

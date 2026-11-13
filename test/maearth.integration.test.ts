@@ -37,6 +37,8 @@ const recordSubject = (uri: string) => ({
 })
 const cid = 'bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u'
 const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
+/** The DID authority of a record URI, which is the item's actor. */
+const authorOf = (uri: string) => uri.split('/')[2]
 
 const seed = async (
   actor: string,
@@ -235,7 +237,14 @@ describe('MaEarth Following SQL', () => {
     const createdAt = '2026-10-14T12:00:00.000000Z'
     const account = (subject: string, followedDid: string) => ({
       subject,
-      view: { $type: viewType, kind: 'accountFollow', createdAt, followedDid },
+      view: {
+        $type: viewType,
+        kind: 'accountFollow',
+        createdAt,
+        cid,
+        actorDid: authorOf(subject),
+        followedDid,
+      },
     })
     const entity = (subject: string, followedProjectUri: string) => ({
       subject,
@@ -243,6 +252,8 @@ describe('MaEarth Following SQL', () => {
         $type: viewType,
         kind: 'projectFollow',
         createdAt,
+        cid,
+        actorDid: authorOf(subject),
         followedProjectUri,
       },
     })
@@ -283,6 +294,8 @@ describe('MaEarth Following SQL', () => {
           $type: 'org.hypercerts.feed.defs#maearthFeedView',
           kind: 'repost',
           createdAt: '2026-10-14T12:00:00.000000Z',
+          cid,
+          actorDid: author,
           repostedPostUri: target,
         },
       },

@@ -36,6 +36,16 @@
           "knownValues": ["post", "projectFollow", "accountFollow", "repost"]
         },
         "createdAt": { "type": "string", "format": "datetime" },
+        "cid": {
+          "type": "string",
+          "format": "cid",
+          "description": "CID of the item's own record, the entry's subject URI. Optional; this service sets it for every kind."
+        },
+        "actorDid": {
+          "type": "string",
+          "format": "did",
+          "description": "DID of the item's record author (the poster, follower or reposter), which is the authority of the entry's subject URI. Optional; this service sets it for every kind."
+        },
         "repostedPostUri": {
           "type": "string",
           "format": "at-uri",

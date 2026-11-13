@@ -609,7 +609,12 @@ describe('MaEarth feed Lexicon contract', () => {
 
   it('parses generated views and params, with every target optional, and rejects malformed ones', () => {
     const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
-    const base = { $type: viewType, createdAt: '2026-10-14T12:00:00.123456Z' }
+    const base = {
+      $type: viewType,
+      createdAt: '2026-10-14T12:00:00.123456Z',
+      cid: 'bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u',
+      actorDid,
+    }
     const postUri = `at://${actorDid}/org.hypercerts.context.attachment/3kpn`
     const projectUri = `at://${actorDid}/org.hypercerts.collection/3kpn`
     for (const valid of [
@@ -628,6 +633,13 @@ describe('MaEarth feed Lexicon contract', () => {
     expect(() =>
       maearthFeedView.schema.$parse({ $type: viewType, kind: 'post' }),
     ).toThrow()
+    // cid and actorDid are optional.
+    for (const missing of ['cid', 'actorDid'] as const) {
+      const { [missing]: _omitted, ...rest } = base
+      expect(() =>
+        maearthFeedView.schema.$parse({ ...rest, kind: 'post' }),
+      ).not.toThrow()
+    }
     expect(() =>
       maearthFeedView.schema.$parse({
         $type: viewType,
@@ -636,6 +648,8 @@ describe('MaEarth feed Lexicon contract', () => {
     ).toThrow()
     for (const invalid of [
       { kind: 'post', createdAt: '10000-01-01T00:00:00Z' },
+      { kind: 'post', cid: 'not-a-cid' },
+      { kind: 'post', actorDid: 'not-a-did' },
       { kind: 'repost', repostedPostUri: 'not-an-at-uri' },
       { kind: 'projectFollow', followedProjectUri: 'not-an-at-uri' },
       { kind: 'projectFollow', followedProjectUri: 42 },
