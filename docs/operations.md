@@ -44,7 +44,9 @@ GRANT CONNECT ON DATABASE happyview TO hypercerts_feed_reader;
 GRANT USAGE ON SCHEMA public TO hypercerts_feed_reader;
 GRANT SELECT ON TABLE public.happyview_records, public.happyview_labels
   TO hypercerts_feed_reader;
--- Only when MAEARTH_FEED_ENABLED=true: the MaEarth like, repost and reply counts.
+-- Only when MAEARTH_FEED_ENABLED=true. Required before deploying: both MaEarth
+-- endpoints fail without it. Used for the like, repost and reply counts.
+-- Also advised: ALTER ROLE hypercerts_feed_reader SET jit = off.
 GRANT SELECT ON TABLE public.happyview_record_refs TO hypercerts_feed_reader;
 ALTER ROLE hypercerts_feed_reader SET default_transaction_read_only = on;
 ```

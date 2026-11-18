@@ -41,7 +41,7 @@ The adapter expects HappyView's prefixed table names. Migration `20260318000000_
 
 ## Read-only access
 
-Use a dedicated role with `SELECT` only on the runtime tables: `happyview_records` and `happyview_labels`, plus `happyview_record_refs` when `MAEARTH_FEED_ENABLED=true` (without it, MaEarth `getFeed` fails with a permission error). `default_transaction_read_only=on` is defense in depth, not a replacement for grants.
+Use a dedicated role with `SELECT` only on the runtime tables: `happyview_records` and `happyview_labels`, plus `happyview_record_refs` when `MAEARTH_FEED_ENABLED=true`. Both MaEarth endpoints, `getFeed` and `getFeedSkeleton`, run the same statement, and PostgreSQL checks privileges on every table in it, so both fail with a permission error until the grant exists. Grant it before deploying. `default_transaction_read_only=on` is defense in depth, not a replacement for grants.
 
 ```sql
 CREATE ROLE hypercerts_feed_reader LOGIN PASSWORD '<managed-secret>';
@@ -121,7 +121,7 @@ Read rules specific to this feed:
 
 ## Reaction counts and `happyview_record_refs`
 
-MaEarth `getFeed` counts reactions to each page's posts in the same statement, after pagination, for at most `limit + 1` posts. A `post` item counts itself and a `repost` item counts its original post (`repostedPostUri`); follows have no counts. The skeleton skips the lookup. The lookup runs in two steps:
+MaEarth `getFeed` counts reactions to each page's posts in the same statement, after pagination, for at most `limit + 1` posts. A `post` item counts itself and a `repost` item counts its original post (`repostedPostUri`); follows have no counts. The skeleton skips the lookup's work but not its table dependency: the statement still names `happyview_record_refs`, so the skeleton also needs `SELECT` on it. The lookup runs in two steps:
 
 1. Candidates come from `happyview_record_refs` by `(target_uri, collection)`, restricted to the like, repost and attachment collections. A refs row exists for every `at://` string at any depth of a record, not only the field that makes it a reaction, so a row is only a candidate.
 2. Each candidate's source record is read from `happyview_records` by primary key, decoded under the usual guard, and re-checked:
