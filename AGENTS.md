@@ -91,9 +91,11 @@ src/server.ts
   -> registered HappyView-backed SQL feed
   -> src/feed/feed-query.sql, source mode enabled
   -> validateFeedRecord(), dropping invalid selected sources
+  -> buildRecordSubject() / buildItemContent()
+  -> itemView.schema.$matches(), dropping invalid items
   -> IdentityReader.getByDids()
   -> validateCertifiedProfile()
-  -> buildActorView() / buildItemSubject() / buildItemContent()
+  -> buildActorView() / buildEndorsedSubject()
 ```
 
 Ownership:
