@@ -15,7 +15,7 @@ export class FeedService implements FeedSkeletonReader {
   ): Promise<GetFeedSkeletonOutput> {
     const page = await this.pages.loadPage(input, 'metadata')
     return {
-      feed: page.rows.map((row) => ({ subject: row.uri })),
+      feed: page.rows.map((row) => ({ uri: row.uri })),
       ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
     }
   }

@@ -47,9 +47,27 @@ GRANT SELECT ON TABLE public.happyview_records, public.happyview_labels
 ALTER ROLE hypercerts_feed_reader SET default_transaction_read_only = on;
 ```
 
+Apply this block as well only when `MAEARTH_FEED_ENABLED=true`:
+
+```sql
+-- Required before deploying: both MaEarth endpoints (getFeed and
+-- getFeedSkeleton) fail without it. Used for the like, repost and reply counts.
+GRANT SELECT ON TABLE public.happyview_record_refs TO hypercerts_feed_reader;
+-- Advised: JIT compile time can dominate the MaEarth statement (see docs/api.md).
+ALTER ROLE hypercerts_feed_reader SET jit = off;
+```
+
+A role setting applies only to sessions opened after it. After `SET jit = off`, recycle existing and pooled connections (restart the service and any external pooler's server connections), then run `SHOW jit` over the feed's own connection path and confirm it reports `off`.
+
 The service has no migrations or feed tables of its own. `/ready` checks that the database can be reached, PostgreSQL 16 can safely validate JSON and timestamp text, and the session is read-only. It does not check HappyView tables, labeler subscription health, label completeness, or ingestion freshness. See [`docs/database-contract.md`](database-contract.md) for the runtime schema contract.
 
-Before cutover, grant the service read-only access to `happyview_records` and `happyview_labels`, confirm that trusted labeler subscriptions are configured, and verify the record collections needed by this service are being stored. A present label row proves only that HappyView currently projects that label; it does not prove that every label was ingested.
+Before cutover, grant the service read-only access to `happyview_records` and `happyview_labels` (and `happyview_record_refs` when the MaEarth feed is enabled), confirm that trusted labeler subscriptions are configured, and verify the record collections needed by this service are being stored. A present label row proves only that HappyView currently projects that label; it does not prove that every label was ingested.
+
+MaEarth cutover checklist, required before setting `MAEARTH_FEED_ENABLED=true`:
+
+1. Grant `SELECT` on `happyview_record_refs` and, as advised, set `jit = off`, using the second block above, then verify `SHOW jit` as described there.
+2. Confirm the lexicons the MaEarth feed needs, including `app.certified.feed.like`, are installed, subscribed and backfilled.
+3. Run the `happyview_record_refs` audit in [database-contract.md](database-contract.md#reaction-counts-and-happyview_record_refs) on the HappyView database, once the records are backfilled so it checks what the feed will count. `missing` must be `0` in both result sets; if it is not, HappyView must repair the table first, because the counts would undercount.
 
 ## Deployment
 

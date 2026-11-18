@@ -3,11 +3,12 @@ export const MAEARTH_FEED_ID = 'org.hypercerts.feed.defs#maearthFeed' as const
 export const MAEARTH_FEED_PARAMS_TYPE =
   'org.hypercerts.feed.defs#maearthFeedParams' as const
 
+/** Item kinds of the MaEarth feed. `update` is a post: an attachment with contentType `update`. */
 export const MAEARTH_KINDS = [
-  'post',
-  'projectFollow',
-  'accountFollow',
+  'update',
   'repost',
+  'project-follow',
+  'account-follow',
 ] as const
 export type MaearthKind = (typeof MAEARTH_KINDS)[number]
 
@@ -17,22 +18,6 @@ export interface MaearthFeedParams {
   /** Narrows the viewer's Following scope; does not select a public profile feed. */
   readonly actorDid?: string
   readonly kinds?: readonly string[]
-}
-
-/** Merge metadata only: MaEarth owns content hydration and visibility filtering. */
-export interface MaearthFeedView {
-  readonly $type: 'org.hypercerts.feed.defs#maearthFeedView'
-  readonly kind: MaearthKind
-  readonly createdAt: string
-  /** CID of the item's own record (the entry's subject). */
-  readonly cid?: string
-  /** The item record's author: the subject URI's authority. */
-  readonly actorDid?: string
-  readonly repostedPostUri?: string
-  /** The followed project's collection URI; present only for `projectFollow`. */
-  readonly followedProjectUri?: string
-  /** The followed account; present only for `accountFollow`. */
-  readonly followedDid?: string
 }
 
 export const isMaearthKind = (kind: string): kind is MaearthKind =>

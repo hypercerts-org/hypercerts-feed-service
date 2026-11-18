@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest'
 
 import { FeedErrorCode } from '../src/feed/errors.js'
 import {
+  itemView,
   maearthFeedParams,
-  maearthFeedView,
 } from '../src/lexicons/org/hypercerts/feed/defs.js'
 import {
   $input as hydratedInput,
@@ -75,13 +75,13 @@ const createdAt = '2026-07-21T10:00:00.000Z'
 const feedId = 'org.hypercerts.feed.defs#hypercertsFeed'
 const paramsType = 'org.hypercerts.feed.defs#hypercertsFeedParams'
 const supportedFeedKinds = [
-  'cert.create',
-  'collection.create',
-  'project.created_with_cert',
-  'evaluation.create',
-  'measurement.create',
-  'update.create',
-  'endorsement.award',
+  'cert',
+  'collection',
+  'project-with-cert',
+  'evaluation',
+  'measurement',
+  'endorsement',
+  'update',
 ] as const
 
 const feedRequest = {
@@ -123,74 +123,78 @@ const actor = {
   displayName: 'Actor',
   avatar: smallImage,
 }
-const target = { uri: targetUri, cid }
+const recordRef = { uri: targetUri, cid }
+const recordSubject = {
+  $type: 'org.hypercerts.feed.defs#recordView',
+  ...recordRef,
+}
+const actorSubject = {
+  $type: 'org.hypercerts.feed.defs#actorView',
+  did: viewerDid,
+}
 
-const viewsByKind = {
-  'cert.create': {
+const contentByKind = {
+  cert: {
     $type: 'org.hypercerts.feed.defs#activityView',
     title: 'Restore the watershed',
     image: uriImage,
-    createdAt,
     locationCount: 2,
   },
-  'collection.create': {
+  collection: {
     $type: 'org.hypercerts.feed.defs#collectionView',
     title: 'Watershed projects',
     image: largeImage,
-    createdAt,
     itemCount: 3,
   },
-  'project.created_with_cert': {
+  'project-with-cert': {
     $type: 'org.hypercerts.feed.defs#collectionView',
     title: 'Watershed project',
-    createdAt,
     itemCount: 1,
   },
-  'endorsement.award': {
-    $type: 'org.hypercerts.feed.defs#endorsementView',
-    subject: { did: viewerDid },
-    createdAt,
-  },
-  'evaluation.create': {
+  evaluation: {
     $type: 'org.hypercerts.feed.defs#evaluationView',
     summary: 'Strong evidence',
-    createdAt,
-    target,
   },
-  'measurement.create': {
+  measurement: {
     $type: 'org.hypercerts.feed.defs#measurementView',
     metric: 'hectares restored',
-    createdAt,
-    target,
+    subjects: [recordRef],
   },
-  'update.create': {
+  update: {
     $type: 'org.hypercerts.feed.defs#updateView',
     title: 'Field report',
     image: smallBlob,
-    createdAt,
-    target,
+    subjects: [recordRef],
   },
 } as const
 
-const feedItem = (
-  kind: keyof typeof viewsByKind = 'cert.create',
-): JsonObject => ({
-  subject: uri,
-  view: {
-    $type: 'org.hypercerts.feed.defs#hypercertsFeedView',
+const hypercertsItem = (
+  kind: (typeof supportedFeedKinds)[number],
+): JsonObject => {
+  // Evaluations point at a record and endorsements at an account; an endorsement has no content.
+  const subject =
+    kind === 'evaluation'
+      ? recordSubject
+      : kind === 'endorsement'
+        ? actorSubject
+        : undefined
+  const content = kind === 'endorsement' ? undefined : contentByKind[kind]
+  return {
+    uri,
+    cid,
+    author: actor,
     kind,
-    actor,
-    content: viewsByKind[kind],
-  },
-})
+    sortAt: createdAt,
+    createdAt,
+    ...(subject === undefined ? {} : { subject }),
+    ...(content === undefined ? {} : { content }),
+  }
+}
 
-const withFeedView = (item: JsonObject, overrides: JsonObject): JsonObject => ({
+const withContent = (item: JsonObject, content: JsonObject): JsonObject => ({
   ...item,
-  view: { ...objectAt(item, 'view'), ...overrides },
+  content,
 })
-
-const withContent = (item: JsonObject, content: JsonObject): JsonObject =>
-  withFeedView(item, { content })
 
 describe('feed Lexicon contract', () => {
   it('keeps registered feed inputs and UpperCamelCase public errors identical', () => {
@@ -217,8 +221,13 @@ describe('feed Lexicon contract', () => {
       ),
     ).toEqual(supportedFeedKinds)
     expect(
-      valueAt(defs, 'hypercertsFeedView', 'properties', 'kind', 'knownValues'),
-    ).toEqual(supportedFeedKinds)
+      valueAt(defs, 'itemView', 'properties', 'kind', 'knownValues'),
+    ).toEqual([
+      ...supportedFeedKinds,
+      'repost',
+      'project-follow',
+      'account-follow',
+    ])
     expect(
       valueAt(hydratedMain, 'input', 'schema', 'properties', 'params'),
     ).toMatchObject({
@@ -299,20 +308,19 @@ describe('feed Lexicon contract', () => {
       maxLength: 4096,
     })
     expect(
-      valueAt(skeletonLexicon, 'defs', 'feedSkeletonItem', 'required'),
-    ).toEqual(['subject'])
-    expect(
-      valueAt(skeletonLexicon, 'defs', 'feedSkeletonItem', 'properties'),
-    ).toEqual({
-      subject: {
-        type: 'string',
-        format: 'at-uri',
-        description: 'AT-URI of the record to hydrate.',
-      },
+      valueAt(skeletonMain, 'output', 'schema', 'properties', 'feed', 'items'),
+    ).toEqual({ type: 'ref', ref: 'org.hypercerts.feed.defs#skeletonItem' })
+    expect(valueAt(defs, 'skeletonItem', 'required')).toEqual(['uri'])
+    expect(Object.keys(objectAt(defs, 'skeletonItem', 'properties'))).toEqual([
+      'uri',
+    ])
+    expect(valueAt(defs, 'skeletonItem', 'properties', 'uri')).toMatchObject({
+      type: 'string',
+      format: 'at-uri',
     })
     expect(defs).toHaveProperty('organizationQualityPolicy')
     expect(skeletonLexicon.defs).not.toHaveProperty('organizationQualityPolicy')
-    expect(defs).not.toHaveProperty('feedSkeletonItem')
+    expect(skeletonLexicon.defs).not.toHaveProperty('feedSkeletonItem')
 
     expect(() =>
       skeletonInput.schema.$parse({
@@ -334,8 +342,11 @@ describe('feed Lexicon contract', () => {
       }),
     ).not.toThrow()
     expect(() =>
-      skeletonOutput.schema.$parse({ feed: [{ subject: uri }] }),
+      skeletonOutput.schema.$parse({ feed: [{ uri }] }),
     ).not.toThrow()
+    expect(() =>
+      skeletonOutput.schema.$parse({ feed: [{ subject: uri }] }),
+    ).toThrow()
   })
 
   it('keeps every union in the public feed Lexicons open', () => {
@@ -344,69 +355,68 @@ describe('feed Lexicon contract', () => {
     }
   })
 
-  it('defines a generic hydrated item with a required open feed view', () => {
+  it('defines one flat item with only uri, author, kind and sortAt required and open unions', () => {
     expect(valueAt(hydratedMain, 'output', 'schema', 'required')).toEqual([
       'feed',
     ])
     expect(
       valueAt(hydratedMain, 'output', 'schema', 'properties', 'feed', 'items'),
-    ).toEqual({
-      type: 'ref',
-      ref: '#feedItem',
-    })
-    expect(valueAt(hydratedLexicon, 'defs', 'feedItem', 'required')).toEqual([
-      'subject',
-      'view',
-    ])
-    expect(
-      valueAt(hydratedLexicon, 'defs', 'feedItem', 'properties', 'subject'),
-    ).toMatchObject({
-      type: 'string',
-      format: 'at-uri',
-    })
-    expect(
-      valueAt(hydratedLexicon, 'defs', 'feedItem', 'properties', 'view'),
-    ).toMatchObject({
-      type: 'union',
-      closed: false,
-      refs: [
-        'org.hypercerts.feed.defs#hypercertsFeedView',
-        'org.hypercerts.feed.defs#maearthFeedView',
-      ],
-    })
-    expect(valueAt(defs, 'hypercertsFeedView', 'required')).toEqual([
+    ).toEqual({ type: 'ref', ref: 'org.hypercerts.feed.defs#itemView' })
+    expect(valueAt(defs, 'itemView', 'required')).toEqual([
+      'uri',
+      'author',
       'kind',
-      'actor',
-      'content',
+      'sortAt',
     ])
-    expect(
-      valueAt(defs, 'hypercertsFeedView', 'properties', 'content'),
-    ).toMatchObject({
-      type: 'union',
-      closed: false,
-      refs: [
-        '#activityView',
-        '#collectionView',
-        '#endorsementView',
-        '#evaluationView',
-        '#measurementView',
-        '#updateView',
-      ],
+    expect(objectAt(defs, 'itemView', 'properties')).toMatchObject({
+      uri: { type: 'string', format: 'at-uri' },
+      cid: { type: 'string', format: 'cid' },
+      author: { type: 'ref', ref: '#actorView' },
+      sortAt: { type: 'string', format: 'datetime' },
+      createdAt: { type: 'string', format: 'datetime' },
+      subject: {
+        type: 'union',
+        closed: false,
+        refs: ['#recordView', '#actorView'],
+      },
+      likeCount: { type: 'integer', minimum: 0 },
+      repostCount: { type: 'integer', minimum: 0 },
+      replyCount: { type: 'integer', minimum: 0 },
+      content: {
+        type: 'union',
+        closed: false,
+        refs: [
+          '#activityView',
+          '#collectionView',
+          '#evaluationView',
+          '#measurementView',
+          '#updateView',
+        ],
+      },
     })
-    expect(defs).not.toHaveProperty('feedItem')
+    expect(valueAt(defs, 'actorView', 'required')).toEqual(['did'])
+    expect(valueAt(defs, 'recordView', 'required')).toEqual(['uri'])
+    // The envelope and the per-feed views it carried are gone.
+    for (const removed of [
+      'feedItem',
+      'hypercertsFeedView',
+      'maearthFeedView',
+      'maearthActor',
+      'maearthTarget',
+      'actorSummary',
+      'endorsementView',
+    ]) {
+      expect(defs).not.toHaveProperty(removed)
+    }
+    expect(hydratedLexicon.defs).not.toHaveProperty('feedItem')
 
-    const serialized = JSON.stringify({
-      feedItem: valueAt(hydratedLexicon, 'defs', 'feedItem'),
-      hypercertsFeedView: valueAt(defs, 'hypercertsFeedView'),
-    })
+    const serialized = JSON.stringify(valueAt(defs, 'itemView'))
     for (const forbidden of [
       'record',
       'recordState',
       'profileSource',
       'actorDid',
       'feedTimestamp',
-      'notFound',
-      'cidMismatch',
     ]) {
       expect(serialized).not.toContain(`"${forbidden}"`)
     }
@@ -427,10 +437,10 @@ describe('feed Lexicon contract', () => {
     })
 
     const activityWithoutCount: Record<string, unknown> = {
-      ...viewsByKind['cert.create'],
+      ...contentByKind.cert,
     }
     const collectionWithoutCount: Record<string, unknown> = {
-      ...viewsByKind['collection.create'],
+      ...contentByKind.collection,
     }
     delete activityWithoutCount.locationCount
     delete collectionWithoutCount.itemCount
@@ -438,8 +448,8 @@ describe('feed Lexicon contract', () => {
     expect(() =>
       hydratedOutput.schema.$parse({
         feed: [
-          withContent(feedItem('cert.create'), activityWithoutCount),
-          withContent(feedItem('collection.create'), collectionWithoutCount),
+          withContent(hypercertsItem('cert'), activityWithoutCount),
+          withContent(hypercertsItem('collection'), collectionWithoutCount),
         ],
       }),
     ).not.toThrow()
@@ -449,14 +459,14 @@ describe('feed Lexicon contract', () => {
     expect(defs).not.toHaveProperty('uriImage')
     expect(defs).not.toHaveProperty('blobImage')
     expect(
-      Object.keys(objectAt(defs, 'actorSummary', 'properties')).sort(),
+      Object.keys(objectAt(defs, 'actorView', 'properties')).sort(),
     ).toEqual(['avatar', 'did', 'displayName'])
-    expect(valueAt(defs, 'actorSummary', 'properties', 'avatar')).toEqual({
+    expect(valueAt(defs, 'actorView', 'properties', 'avatar')).toEqual({
       type: 'union',
       refs: ['org.hypercerts.defs#uri', 'org.hypercerts.defs#smallImage'],
     })
     expect(valueAt(defs, 'activityView', 'properties', 'image')).toEqual(
-      valueAt(defs, 'actorSummary', 'properties', 'avatar'),
+      valueAt(defs, 'actorView', 'properties', 'avatar'),
     )
     expect(valueAt(defs, 'collectionView', 'properties', 'image')).toEqual({
       type: 'union',
@@ -472,24 +482,35 @@ describe('feed Lexicon contract', () => {
     })
   })
 
-  it('uses strong-reference targets only on evaluation, measurement, and update views', () => {
-    for (const name of ['evaluationView', 'measurementView', 'updateView']) {
-      expect(valueAt(defs, name, 'properties', 'target')).toEqual({
-        type: 'ref',
-        ref: 'com.atproto.repo.strongRef',
+  it('moves createdAt and the evaluation target to the item and lists subjects only in measurement and update content', () => {
+    for (const name of [
+      'activityView',
+      'collectionView',
+      'evaluationView',
+      'measurementView',
+      'updateView',
+    ]) {
+      const properties = objectAt(defs, name, 'properties')
+      expect(properties).not.toHaveProperty('createdAt')
+      expect(properties).not.toHaveProperty('target')
+    }
+    for (const name of ['measurementView', 'updateView']) {
+      expect(valueAt(defs, name, 'properties', 'subjects')).toMatchObject({
+        type: 'array',
+        items: { type: 'ref', ref: '#recordView' },
       })
     }
   })
 
-  it('accepts both image variants and all six views across seven kinds', () => {
-    const items = supportedFeedKinds.map((kind) => feedItem(kind))
+  it('accepts both image variants and every Hypercerts kind with its own subject and content', () => {
+    const items = supportedFeedKinds.map((kind) => hypercertsItem(kind))
 
     expect(() =>
       hydratedOutput.schema.$parse({ feed: items, cursor: 'opaque-cursor' }),
     ).not.toThrow()
   })
 
-  it('accepts unknown future image and view variants through open unions', () => {
+  it('accepts unknown future image, subject and content variants and unknown fields', () => {
     const unknownImage = {
       $type: 'example.feed#unknownImage',
       uri: 'https://example.com/future-image.png',
@@ -497,19 +518,25 @@ describe('feed Lexicon contract', () => {
     expect(() =>
       hydratedOutput.schema.$parse({
         feed: [
-          withFeedView(feedItem(), {
-            actor: { did: actorDid, avatar: unknownImage },
-          }),
-          withContent(feedItem(), {
-            ...viewsByKind['cert.create'],
+          {
+            ...hypercertsItem('cert'),
+            author: {
+              did: actorDid,
+              avatar: unknownImage,
+              handle: 'a.example',
+            },
+            somethingNew: 1,
+          },
+          withContent(hypercertsItem('cert'), {
+            ...contentByKind.cert,
             image: unknownImage,
           }),
-          withContent(feedItem(), {
+          withContent(hypercertsItem('cert'), {
             $type: 'example.feed#unknownContent',
           }),
           {
-            ...feedItem(),
-            view: { $type: 'example.feed#unknownFeedView' },
+            ...hypercertsItem('evaluation'),
+            subject: { $type: 'example.feed#unknownSubject' },
           },
         ],
       }),
@@ -517,69 +544,92 @@ describe('feed Lexicon contract', () => {
   })
 
   it.each([
+    ['the old envelope', { subject: uri, view: { $type: 'x', kind: 'cert' } }],
     [
-      'missing view discriminator',
-      { ...feedItem(), view: { kind: 'cert.create', actor, content: {} } },
-    ],
-    [
-      'missing required view',
+      'a missing author',
       (() => {
-        const item = feedItem()
-        delete item.view
+        const { author: _author, ...item } = hypercertsItem('cert')
         return item
       })(),
     ],
     [
-      'missing image discriminator',
-      withFeedView(feedItem(), {
-        actor: {
+      'a missing sortAt',
+      (() => {
+        const { sortAt: _sortAt, ...item } = hypercertsItem('cert')
+        return item
+      })(),
+    ],
+    [
+      'a subject without a discriminator',
+      { ...hypercertsItem('evaluation'), subject: recordRef },
+    ],
+    [
+      'a malformed subject reference',
+      {
+        ...hypercertsItem('evaluation'),
+        subject: { ...recordSubject, uri: 'not-an-at-uri' },
+      },
+    ],
+    [
+      'a content value without a discriminator',
+      withContent(hypercertsItem('cert'), { title: 'No type' }),
+    ],
+    [
+      'a malformed author DID',
+      { ...hypercertsItem('cert'), author: { did: 'not-a-did' } },
+    ],
+    [
+      'a malformed sortAt',
+      { ...hypercertsItem('cert'), sortAt: '2026-07-21T10:00:00' },
+    ],
+    [
+      'an avatar without a discriminator',
+      {
+        ...hypercertsItem('cert'),
+        author: {
           did: actorDid,
           avatar: { uri: 'https://example.com/image.png' },
         },
-      }),
+      },
     ],
     [
-      'malformed actor DID',
-      withFeedView(feedItem(), { actor: { did: 'not-a-did' } }),
-    ],
-    [
-      'malformed blob CID',
-      withFeedView(feedItem(), {
-        actor: {
+      'a malformed blob CID',
+      {
+        ...hypercertsItem('cert'),
+        author: {
           did: actorDid,
           avatar: {
             $type: 'org.hypercerts.defs#smallImage',
             image: blobWith({ ref: 'not-a-cid' }),
           },
         },
-      }),
+      },
     ],
     [
-      'malformed image URI',
-      withFeedView(feedItem(), {
-        actor: {
-          did: actorDid,
-          avatar: { ...uriImage, uri: 'not a URI' },
-        },
-      }),
+      'a malformed image URI',
+      {
+        ...hypercertsItem('cert'),
+        author: { did: actorDid, avatar: { ...uriImage, uri: 'not a URI' } },
+      },
     ],
     [
-      'negative image size',
-      withFeedView(feedItem(), {
-        actor: {
+      'a negative image size',
+      {
+        ...hypercertsItem('cert'),
+        author: {
           did: actorDid,
           avatar: {
             $type: 'org.hypercerts.defs#smallImage',
             image: blobWith({ size: -1 }),
           },
         },
-      }),
+      },
     ],
     [
-      'malformed target reference',
-      withContent(feedItem('evaluation.create'), {
-        ...viewsByKind['evaluation.create'],
-        target: { uri: 'not-an-at-uri', cid: 'not-a-cid' },
+      'a malformed measured record',
+      withContent(hypercertsItem('measurement'), {
+        ...contentByKind.measurement,
+        subjects: [{ uri: 'not-an-at-uri', cid: 'not-a-cid' }],
       }),
     ],
   ])('rejects %s', (_label, item) => {
@@ -588,9 +638,9 @@ describe('feed Lexicon contract', () => {
 })
 
 describe('MaEarth feed Lexicon contract', () => {
-  const maearthKinds = ['post', 'projectFollow', 'accountFollow', 'repost']
+  const maearthKinds = ['update', 'repost', 'project-follow', 'account-follow']
 
-  it('defines bounded open-enum params and an open-enum view kind', () => {
+  it('defines bounded open-enum params with the MaEarth kinds', () => {
     expect(valueAt(defs, 'maearthFeed', 'type')).toBe('token')
     expect(valueAt(defs, 'maearthFeedParams', 'required')).toBeUndefined()
     expect(objectAt(defs, 'maearthFeedParams', 'properties')).toMatchObject({
@@ -602,71 +652,125 @@ describe('MaEarth feed Lexicon contract', () => {
         items: { type: 'string', maxLength: 64, knownValues: maearthKinds },
       },
     })
-    expect(objectAt(defs, 'maearthFeedView', 'properties')).toMatchObject({
-      kind: { type: 'string', maxLength: 64, knownValues: maearthKinds },
-    })
   })
 
-  it('parses generated views and params, with every target optional, and rejects malformed ones', () => {
-    const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
+  it('parses flat MaEarth items, with subject and counts per kind and no content, and rejects malformed ones', () => {
     const base = {
-      $type: viewType,
-      createdAt: '2026-10-14T12:00:00.123456Z',
-      cid: 'bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u',
-      actorDid,
+      uri: `at://${actorDid}/app.certified.feed.repost/3kpn`,
+      cid,
+      author: { did: actorDid },
+      kind: 'repost',
+      sortAt: '2026-10-14T12:00:00.123456Z',
+      // The record's own value, which need not be UTC.
+      createdAt: '2026-10-14T14:00:00.5+02:00',
     }
     const postUri = `at://${actorDid}/org.hypercerts.context.attachment/3kpn`
     const projectUri = `at://${actorDid}/org.hypercerts.collection/3kpn`
+    const counts = { likeCount: 0, repostCount: 12, replyCount: 3 }
     for (const valid of [
-      { kind: 'repost', repostedPostUri: postUri },
-      { kind: 'projectFollow', followedProjectUri: projectUri },
-      { kind: 'accountFollow', followedDid: actorDid },
-      // Older consumers and other kinds omit every target.
-      { kind: 'projectFollow' },
-      { kind: 'post' },
+      {
+        subject: {
+          $type: 'org.hypercerts.feed.defs#recordView',
+          uri: postUri,
+          cid,
+          ...counts,
+        },
+      },
+      // A project follow's subject has no CID.
+      {
+        kind: 'project-follow',
+        subject: {
+          $type: 'org.hypercerts.feed.defs#recordView',
+          uri: projectUri,
+        },
+      },
+      {
+        kind: 'account-follow',
+        subject: { $type: 'org.hypercerts.feed.defs#actorView', did: actorDid },
+      },
+      { kind: 'update', ...counts },
+      { kind: 'update' },
     ]) {
-      expect(maearthFeedView.schema.$parse({ ...base, ...valid })).toEqual({
+      expect(itemView.schema.$parse({ ...base, ...valid })).toEqual({
         ...base,
         ...valid,
       })
     }
-    expect(() =>
-      maearthFeedView.schema.$parse({ $type: viewType, kind: 'post' }),
-    ).toThrow()
-    // cid and actorDid are optional.
-    for (const missing of ['cid', 'actorDid'] as const) {
-      const { [missing]: _omitted, ...rest } = base
-      expect(() =>
-        maearthFeedView.schema.$parse({ ...rest, kind: 'post' }),
-      ).not.toThrow()
+    // cid and createdAt are optional; the four required fields are not.
+    for (const optional of ['cid', 'createdAt'] as const) {
+      const { [optional]: _omitted, ...rest } = base
+      expect(() => itemView.schema.$parse(rest)).not.toThrow()
     }
+    for (const required of ['uri', 'author', 'kind', 'sortAt'] as const) {
+      const { [required]: _omitted, ...rest } = base
+      expect(() => itemView.schema.$parse(rest)).toThrow()
+    }
+    // Objects and unions are open: later fields and variants must not break parsing.
     expect(() =>
-      maearthFeedView.schema.$parse({
-        $type: viewType,
-        createdAt: base.createdAt,
+      itemView.schema.$parse({
+        ...base,
+        author: { did: actorDid, handle: 'someone.example.com' },
+        subject: {
+          $type: 'org.hypercerts.feed.defs#recordView',
+          uri: postUri,
+          future: true,
+        },
+        kind: 'future-kind',
+        somethingNew: 1,
       }),
-    ).toThrow()
+    ).not.toThrow()
     for (const invalid of [
-      { kind: 'post', createdAt: '10000-01-01T00:00:00Z' },
-      { kind: 'post', cid: 'not-a-cid' },
-      { kind: 'post', actorDid: 'not-a-did' },
-      { kind: 'repost', repostedPostUri: 'not-an-at-uri' },
-      { kind: 'projectFollow', followedProjectUri: 'not-an-at-uri' },
-      { kind: 'projectFollow', followedProjectUri: 42 },
-      { kind: 'accountFollow', followedDid: 'not-a-did' },
+      { createdAt: '10000-01-01T00:00:00Z' },
+      { createdAt: '2026-10-14T12:00:00' },
+      { sortAt: '2026-10-14T12:00:00' },
+      { cid: 'not-a-cid' },
+      { author: {} },
+      { author: { did: 'not-a-did' } },
+      { author: actorDid },
+      { subject: { uri: postUri } },
+      {
+        subject: {
+          $type: 'org.hypercerts.feed.defs#recordView',
+          uri: 'not-an-at-uri',
+        },
+      },
+      {
+        subject: {
+          $type: 'org.hypercerts.feed.defs#actorView',
+          did: 'not-a-did',
+        },
+      },
       // The parser's 2048-character DID cap is why the SQL guards the follow subject length.
-      { kind: 'accountFollow', followedDid: `did:web:${'a'.repeat(2041)}` },
-      { kind: 'accountFollow', followedDid: projectUri },
+      {
+        subject: {
+          $type: 'org.hypercerts.feed.defs#actorView',
+          did: `did:web:${'a'.repeat(2041)}`,
+        },
+      },
+      {
+        subject: {
+          $type: 'org.hypercerts.feed.defs#actorView',
+          did: projectUri,
+        },
+      },
+      {
+        subject: {
+          $type: 'org.hypercerts.feed.defs#recordView',
+          uri: postUri,
+          cid: 'not-a-cid',
+        },
+      },
+      { likeCount: -1 },
+      { repostCount: 1.5 },
+      { replyCount: '3' },
     ]) {
-      expect(() =>
-        maearthFeedView.schema.$parse({ ...base, ...invalid }),
-      ).toThrow()
+      expect(() => itemView.schema.$parse({ ...base, ...invalid })).toThrow()
     }
     expect(
       maearthFeedParams.schema.$parse({
         $type: 'org.hypercerts.feed.defs#maearthFeedParams',
         viewerDid,
-        kinds: ['post', 'future-kind'],
+        kinds: ['update', 'future-kind'],
       }),
     ).toMatchObject({ viewerDid })
   })

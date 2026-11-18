@@ -4,7 +4,13 @@ timestamp_patterns AS NOT MATERIALIZED (
     '^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$'::text AS rfc3339_timestamp_pattern,
     '-00:00$'::text AS rfc3339_unknown_offset_suffix_pattern,
     '^[0-9]{4}-[0-9]{2}-[0-9]{2} ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]+)?[+-]([01][0-9]|2[0-3])(:[0-5][0-9](:[0-5][0-9])?)?$'::text AS postgres_timestamp_pattern,
-    '-00(:00(:00)?)?$'::text AS postgres_unknown_offset_suffix_pattern
+    '-00(:00(:00)?)?$'::text AS postgres_unknown_offset_suffix_pattern,
+    -- The effective timestamp is returned as sortAt and encoded in the cursor, and both must be
+    -- valid four-digit-year atproto datetimes. Selected rows are bounded to years 0001 through
+    -- 9999 UTC; a createdAt whose UTC instant lies outside (an offset can push 9999-12-31 into
+    -- year 10000) excludes the row instead of falling back to indexed_at.
+    timestamptz '0001-01-01 00:00:00+00' AS earliest_effective_at,
+    timestamptz '10000-01-01 00:00:00+00' AS effective_at_end
 ),
 -- =============================================================================
 -- Scope resolution
@@ -329,6 +335,11 @@ project_pairs AS (
     AND activity_json.value IS NOT NULL
     AND collection_time.effective_at IS NOT NULL
     AND activity_time.effective_at IS NOT NULL
+    -- A pair suppresses its activity only when the collection is itself eligible. One
+    -- outside the year bound never reaches the feed, and its in-range activity must not
+    -- vanish with it. (An out-of-range activity is excluded by the same bound.)
+    AND collection_time.effective_at >= timestamp_pattern.earliest_effective_at
+    AND collection_time.effective_at < timestamp_pattern.effective_at_end
     AND ABS(EXTRACT(EPOCH FROM (
       activity_time.effective_at - collection_time.effective_at
     ))) < 60
@@ -396,6 +407,8 @@ eligible_records AS (
     ) AS effective_at
   ) AS source_time
   WHERE source_time.effective_at IS NOT NULL
+    AND source_time.effective_at >= timestamp_pattern.earliest_effective_at
+    AND source_time.effective_at < timestamp_pattern.effective_at_end
     AND (
       source.collection <> 'org.hypercerts.claim.activity'
       OR NOT EXISTS (
@@ -428,18 +441,18 @@ classified_events AS (
     source.collection,
     source.did AS actor_did,
     CASE source.collection
-      WHEN 'org.hypercerts.claim.activity' THEN 'cert.create'
+      WHEN 'org.hypercerts.claim.activity' THEN 'cert'
       WHEN 'org.hypercerts.collection' THEN
         CASE
           WHEN EXISTS (
             SELECT 1 FROM paired_collections WHERE paired_collections.uri = source.uri
-          ) THEN 'project.created_with_cert'
-          ELSE 'collection.create'
+          ) THEN 'project-with-cert'
+          ELSE 'collection'
         END
-      WHEN 'org.hypercerts.context.evaluation' THEN 'evaluation.create'
-      WHEN 'org.hypercerts.context.measurement' THEN 'measurement.create'
-      WHEN 'org.hypercerts.context.attachment' THEN 'update.create'
-      WHEN 'app.certified.badge.award' THEN 'endorsement.award'
+      WHEN 'org.hypercerts.context.evaluation' THEN 'evaluation'
+      WHEN 'org.hypercerts.context.measurement' THEN 'measurement'
+      WHEN 'org.hypercerts.context.attachment' THEN 'update'
+      WHEN 'app.certified.badge.award' THEN 'endorsement'
     END AS kind,
     source.effective_at
   FROM eligible_records AS source

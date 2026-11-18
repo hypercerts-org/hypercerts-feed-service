@@ -25,6 +25,7 @@ const viewer = 'did:plc:ar7c4by46qjdydhdevvrndac'
 const actor = 'did:plc:ewvi7nxzyoun6zhxrhs64oiz'
 const uri = `at://${actor}/org.hypercerts.claim.activity/3kpn`
 const blobCid = 'bafkreiehxpuhtr5f6v4eu4byjo2j7kkrhjvd7psmfu4imnpdzb3bdqb7vy'
+const itemCid = 'bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u'
 const avatarBlob = lexParse<BlobRef>(
   JSON.stringify({
     $type: 'blob',
@@ -326,7 +327,7 @@ describe('HTTP application', () => {
     const skeleton: FeedSkeletonReader = {
       getFeedSkeleton: vi.fn((input: GetFeedSkeletonInput) => {
         received = input
-        return Promise.resolve({ feed: [{ subject: uri }] })
+        return Promise.resolve({ feed: [{ uri }] })
       }),
     }
     const app = createApp(
@@ -343,7 +344,7 @@ describe('HTTP application', () => {
     expect(response.status).toBe(200)
     expect(received).toMatchObject(feedRequest())
     await expect(response.json()).resolves.toEqual({
-      feed: [{ subject: uri }],
+      feed: [{ uri }],
     })
   })
 
@@ -501,22 +502,21 @@ describe('HTTP application', () => {
         return Promise.resolve({
           feed: [
             {
-              subject: uri,
-              view: {
-                $type: 'org.hypercerts.feed.defs#hypercertsFeedView' as const,
-                kind: 'cert.create' as const,
-                actor: {
-                  did: actor,
-                  avatar: {
-                    $type: 'org.hypercerts.defs#smallImage' as const,
-                    image: avatarBlob,
-                  },
+              uri,
+              cid: itemCid,
+              author: {
+                did: actor,
+                avatar: {
+                  $type: 'org.hypercerts.defs#smallImage' as const,
+                  image: avatarBlob,
                 },
-                content: {
-                  $type: 'org.hypercerts.feed.defs#activityView' as const,
-                  title: 'Restore the watershed',
-                  locationCount: 0,
-                },
+              },
+              kind: 'cert' as const,
+              sortAt: '2026-07-21T10:00:00.000000Z',
+              content: {
+                $type: 'org.hypercerts.feed.defs#activityView' as const,
+                title: 'Restore the watershed',
+                locationCount: 0,
               },
             },
           ],
@@ -539,24 +539,24 @@ describe('HTTP application', () => {
     await expect(response.json()).resolves.toMatchObject({
       feed: [
         {
-          subject: uri,
-          view: {
-            $type: 'org.hypercerts.feed.defs#hypercertsFeedView',
-            actor: {
-              did: actor,
-              avatar: {
-                $type: 'org.hypercerts.defs#smallImage',
-                image: {
-                  $type: 'blob',
-                  ref: { $link: blobCid },
-                  mimeType: 'image/png',
-                  size: 128,
-                },
+          uri,
+          cid: itemCid,
+          author: {
+            did: actor,
+            avatar: {
+              $type: 'org.hypercerts.defs#smallImage',
+              image: {
+                $type: 'blob',
+                ref: { $link: blobCid },
+                mimeType: 'image/png',
+                size: 128,
               },
             },
-            content: {
-              $type: 'org.hypercerts.feed.defs#activityView',
-            },
+          },
+          kind: 'cert',
+          sortAt: '2026-07-21T10:00:00.000000Z',
+          content: {
+            $type: 'org.hypercerts.feed.defs#activityView',
           },
         },
       ],
@@ -843,7 +843,7 @@ describe('HTTP application', () => {
       skeletonPath,
       appServices({
         getFeedSkeleton: vi.fn(() =>
-          Promise.resolve({ feed: [{ subject: 'not-an-at-uri' }] }),
+          Promise.resolve({ feed: [{ uri: 'not-an-at-uri' }] }),
         ),
       }),
     ],
@@ -855,16 +855,15 @@ describe('HTTP application', () => {
           Promise.resolve({
             feed: [
               {
-                subject: 'not-an-at-uri',
-                view: {
-                  $type: 'org.hypercerts.feed.defs#hypercertsFeedView' as const,
-                  kind: 'cert.create' as const,
-                  actor: { did: 'not-a-did' },
-                  content: {
-                    $type: 'org.hypercerts.feed.defs#activityView' as const,
-                    title: 'Invalid response fixture',
-                    locationCount: 0,
-                  },
+                uri: 'not-an-at-uri',
+                cid: itemCid,
+                author: { did: 'not-a-did' },
+                kind: 'cert' as const,
+                sortAt: '2026-07-21T10:00:00.000000Z',
+                content: {
+                  $type: 'org.hypercerts.feed.defs#activityView' as const,
+                  title: 'Invalid response fixture',
+                  locationCount: 0,
                 },
               },
             ],

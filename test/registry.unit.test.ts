@@ -22,7 +22,7 @@ const row: InternalFeedRow = {
   cid: 'bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u',
   collection: 'org.hypercerts.claim.activity',
   actorDid,
-  kind: 'cert.create',
+  kind: 'cert',
   sortValue: '2026-07-21T10:00:00.000000Z',
 }
 

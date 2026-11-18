@@ -2,13 +2,17 @@ import { jsonToLex, type JsonObject } from '@atproto/lex'
 import { describe, expect, it } from 'vitest'
 
 import { FEED_KINDS, type FeedKind } from '../src/feed/types.js'
-import type { ActorSummary } from '../src/hydration/types.js'
+import type { ActorView } from '../src/hydration/types.js'
 import {
   getEndorsedActorDid,
   validateFeedRecord,
   type ValidatedFeedRecord,
 } from '../src/hydration/validation.js'
-import { buildFeedItemView } from '../src/hydration/views.js'
+import {
+  buildEndorsedSubject,
+  buildItemContent,
+  buildRecordSubject,
+} from '../src/hydration/views.js'
 
 const actorDid = 'did:plc:abcdefghijklmnopqrstuvwx'
 const subjectDid = 'did:plc:zyxwvutsrqponmlkjihgfedc'
@@ -117,10 +121,7 @@ const records = {
   },
 } as const
 
-const collectionKinds = [
-  'collection.create',
-  'project.created_with_cert',
-] as const
+const collectionKinds = ['collection', 'project-with-cert'] as const
 
 const validated = (
   kind: FeedKind,
@@ -137,7 +138,7 @@ const validated = (
   return result
 }
 
-const endorsedActor: ActorSummary = {
+const endorsedActor: ActorView = {
   did: subjectDid,
   displayName: 'Subject',
 }
@@ -145,25 +146,17 @@ const endorsedActor: ActorSummary = {
 describe('top-level record validation', () => {
   it('accepts exactly the trusted collection and feed-kind matrix', () => {
     const cases: readonly [FeedKind, string, unknown][] = [
-      ['cert.create', 'org.hypercerts.claim.activity', records.activity],
-      ['collection.create', 'org.hypercerts.collection', records.collection],
+      ['cert', 'org.hypercerts.claim.activity', records.activity],
+      ['collection', 'org.hypercerts.collection', records.collection],
+      ['project-with-cert', 'org.hypercerts.collection', records.collection],
+      ['evaluation', 'org.hypercerts.context.evaluation', records.evaluation],
       [
-        'project.created_with_cert',
-        'org.hypercerts.collection',
-        records.collection,
-      ],
-      [
-        'evaluation.create',
-        'org.hypercerts.context.evaluation',
-        records.evaluation,
-      ],
-      [
-        'measurement.create',
+        'measurement',
         'org.hypercerts.context.measurement',
         records.measurement,
       ],
-      ['update.create', 'org.hypercerts.context.attachment', records.update],
-      ['endorsement.award', 'app.certified.badge.award', records.endorsement],
+      ['update', 'org.hypercerts.context.attachment', records.update],
+      ['endorsement', 'app.certified.badge.award', records.endorsement],
     ]
 
     for (const [kind, collection, value] of cases) {
@@ -177,35 +170,35 @@ describe('top-level record validation', () => {
 
   it('rejects missing or wrong types and collection/kind disagreements', () => {
     expect(
-      validateFeedRecord('cert.create', 'org.hypercerts.claim.activity', {
+      validateFeedRecord('cert', 'org.hypercerts.claim.activity', {
         title: 'Missing type',
         shortDescription: 'Invalid',
         createdAt,
       }),
     ).toBeUndefined()
     expect(
-      validateFeedRecord('cert.create', 'org.hypercerts.claim.activity', {
+      validateFeedRecord('cert', 'org.hypercerts.claim.activity', {
         ...records.activity,
         $type: 'org.hypercerts.collection',
       }),
     ).toBeUndefined()
     expect(
       validateFeedRecord(
-        'collection.create',
+        'collection',
         'org.hypercerts.claim.activity',
         records.activity,
       ),
     ).toBeUndefined()
     expect(
       validateFeedRecord(
-        'cert.create',
+        'cert',
         'org.hypercerts.collection',
         records.collection,
       ),
     ).toBeUndefined()
     expect(
       validateFeedRecord(
-        'cert.create',
+        'cert',
         'example.unknown.collection',
         records.activity,
       ),
@@ -223,22 +216,22 @@ describe('top-level record validation', () => {
   it('rejects schema-invalid fixtures for every remaining collection', () => {
     const invalidCases: readonly [FeedKind, string, unknown][] = [
       [
-        'evaluation.create',
+        'evaluation',
         'org.hypercerts.context.evaluation',
         { ...records.evaluation, summary: undefined },
       ],
       [
-        'measurement.create',
+        'measurement',
         'org.hypercerts.context.measurement',
         { ...records.measurement, metric: undefined },
       ],
       [
-        'update.create',
+        'update',
         'org.hypercerts.context.attachment',
         { ...records.update, title: undefined },
       ],
       [
-        'endorsement.award',
+        'endorsement',
         'app.certified.badge.award',
         { ...records.endorsement, badge: undefined },
       ],
@@ -257,7 +250,7 @@ describe('top-level record validation', () => {
 
     expect(
       validateFeedRecord(
-        'endorsement.award',
+        'endorsement',
         'app.certified.badge.award',
         recordSubject,
       ),
@@ -265,7 +258,7 @@ describe('top-level record validation', () => {
     expect(
       getEndorsedActorDid(
         validated(
-          'endorsement.award',
+          'endorsement',
           'app.certified.badge.award',
           records.endorsement,
         ),
@@ -273,11 +266,7 @@ describe('top-level record validation', () => {
     ).toBe(subjectDid)
     expect(
       getEndorsedActorDid(
-        validated(
-          'cert.create',
-          'org.hypercerts.claim.activity',
-          records.activity,
-        ),
+        validated('cert', 'org.hypercerts.claim.activity', records.activity),
       ),
     ).toBeUndefined()
   })
@@ -285,17 +274,17 @@ describe('top-level record validation', () => {
   it('rejects malformed known projected blobs using v1.0.0 constraints', () => {
     const invalidCases: readonly [FeedKind, string, unknown][] = [
       [
-        'cert.create',
+        'cert',
         'org.hypercerts.claim.activity',
         { ...records.activity, image: smallImage({ size: -1 }) },
       ],
       [
-        'cert.create',
+        'cert',
         'org.hypercerts.claim.activity',
         { ...records.activity, image: smallImage({ size: 1.5 }) },
       ],
       [
-        'cert.create',
+        'cert',
         'org.hypercerts.claim.activity',
         {
           ...records.activity,
@@ -303,12 +292,12 @@ describe('top-level record validation', () => {
         },
       ],
       [
-        'cert.create',
+        'cert',
         'org.hypercerts.claim.activity',
         { ...records.activity, image: smallImage({ mimeType: 'image/gif' }) },
       ],
       [
-        'update.create',
+        'update',
         'org.hypercerts.context.attachment',
         {
           ...records.update,
@@ -336,7 +325,7 @@ describe('top-level record validation', () => {
   it('rejects schema-invalid evaluation media blobs', () => {
     const invalidCases: readonly [FeedKind, string, unknown][] = [
       [
-        'evaluation.create',
+        'evaluation',
         'org.hypercerts.context.evaluation',
         {
           ...records.evaluation,
@@ -356,20 +345,16 @@ describe('top-level record validation', () => {
 
   it('accepts valid boundary and forward-compatible evaluation media', () => {
     expect(
-      validateFeedRecord(
-        'evaluation.create',
-        'org.hypercerts.context.evaluation',
-        {
-          ...records.evaluation,
-          content: [
-            uriImage('https://example.com/evaluation'),
-            { $type: 'example.future#attachment', value: 'future' },
-            smallBlob('application/octet-stream', blobCid, {
-              size: 10_485_760,
-            }),
-          ],
-        },
-      ),
+      validateFeedRecord('evaluation', 'org.hypercerts.context.evaluation', {
+        ...records.evaluation,
+        content: [
+          uriImage('https://example.com/evaluation'),
+          { $type: 'example.future#attachment', value: 'future' },
+          smallBlob('application/octet-stream', blobCid, {
+            size: 10_485_760,
+          }),
+        ],
+      }),
     ).toBeDefined()
   })
 
@@ -378,11 +363,7 @@ describe('top-level record validation', () => {
       ...records.activity,
       image: smallImage(),
     }
-    const result = validated(
-      'cert.create',
-      'org.hypercerts.claim.activity',
-      raw,
-    )
+    const result = validated('cert', 'org.hypercerts.claim.activity', raw)
 
     expect(result.rawValue).toBe(raw)
     expect(result.value).not.toBe(raw)
@@ -393,12 +374,11 @@ describe('top-level record validation', () => {
     raw.shortDescription = 'Mutated after validation'
     raw.image = uriImage('https://example.com/mutated.png')
 
-    expect(buildFeedItemView(result)).toEqual({
+    expect(buildItemContent(result)).toEqual({
       $type: 'org.hypercerts.feed.defs#activityView',
       title: 'Restore the watershed',
       shortDescription: 'Native forest restoration',
       image: protocolValue(smallImage()),
-      createdAt,
       locationCount: 0,
     })
   })
@@ -406,7 +386,7 @@ describe('top-level record validation', () => {
 
 describe('feed-card view builders', () => {
   it('builds the activity view with a blob descriptor and location count', () => {
-    const record = validated('cert.create', 'org.hypercerts.claim.activity', {
+    const record = validated('cert', 'org.hypercerts.claim.activity', {
       ...records.activity,
       image: smallImage(),
       startDate: '2026-01-01T00:00:00.000Z',
@@ -414,12 +394,11 @@ describe('feed-card view builders', () => {
       locations: [strongRef(), strongRef(`${targetUri}-2`, secondCid)],
     })
 
-    expect(buildFeedItemView(record)).toEqual({
+    expect(buildItemContent(record)).toEqual({
       $type: 'org.hypercerts.feed.defs#activityView',
       title: 'Restore the watershed',
       shortDescription: 'Native forest restoration',
       image: protocolValue(smallImage()),
-      createdAt,
       startDate: '2026-01-01T00:00:00.000Z',
       endDate: '2026-06-01T00:00:00.000Z',
       locationCount: 2,
@@ -449,79 +428,64 @@ describe('feed-card view builders', () => {
         $type: 'org.hypercerts.defs#uri',
         uri: 'https://example.com/avatar.png',
       },
-      createdAt,
       itemCount: 2,
     }
 
-    for (const kind of [
-      'collection.create',
-      'project.created_with_cert',
-    ] as const) {
+    for (const kind of ['collection', 'project-with-cert'] as const) {
       expect(
-        buildFeedItemView(validated(kind, 'org.hypercerts.collection', raw)),
+        buildItemContent(validated(kind, 'org.hypercerts.collection', raw)),
       ).toEqual(expected)
     }
   })
 
   it('uses banner after an unprojected avatar and ignores legacy collection image fields', () => {
-    const bannerRecord = validated(
-      'collection.create',
-      'org.hypercerts.collection',
-      {
-        ...records.collection,
-        avatar: largeImage({ ref: { $link: blobCid } }),
-        banner: largeImage(),
-      },
-    )
-    const legacyRecord = validated(
-      'collection.create',
-      'org.hypercerts.collection',
-      {
-        ...records.collection,
-        name: 'Legacy name',
-        image: uriImage('https://example.com/legacy.png'),
-      },
-    )
+    const bannerRecord = validated('collection', 'org.hypercerts.collection', {
+      ...records.collection,
+      avatar: largeImage({ ref: { $link: blobCid } }),
+      banner: largeImage(),
+    })
+    const legacyRecord = validated('collection', 'org.hypercerts.collection', {
+      ...records.collection,
+      name: 'Legacy name',
+      image: uriImage('https://example.com/legacy.png'),
+    })
 
-    expect(buildFeedItemView(bannerRecord)).toMatchObject({
+    expect(buildItemContent(bannerRecord)).toMatchObject({
       title: 'Watershed projects',
       image: protocolValue(largeImage()),
     })
-    expect(buildFeedItemView(legacyRecord)).toEqual({
+    expect(buildItemContent(legacyRecord)).toEqual({
       $type: 'org.hypercerts.feed.defs#collectionView',
       title: 'Watershed projects',
-      createdAt,
       itemCount: 0,
     })
   })
 
-  it('builds every endorsement view and rejects missing or mismatched discovered summaries', () => {
+  it("returns the hydrated endorsed account as an endorsement's subject, with no content, and rejects missing or mismatched discovered summaries", () => {
     const record = validated(
-      'endorsement.award',
+      'endorsement',
       'app.certified.badge.award',
       records.endorsement,
     )
 
-    expect(buildFeedItemView(record, { endorsedActor })).toEqual({
-      $type: 'org.hypercerts.feed.defs#endorsementView',
-      subject: endorsedActor,
-      createdAt,
+    expect(buildEndorsedSubject(record, { endorsedActor })).toEqual({
+      $type: 'org.hypercerts.feed.defs#actorView',
+      ...endorsedActor,
     })
-    expect(() => buildFeedItemView(record)).toThrow(
-      'Endorsement view failed because the endorsed account could not be matched to its discovered identity; verify endorsement DID discovery and identity mapping before serving hydrated pages.',
-    )
+    expect(buildItemContent(record)).toBeUndefined()
+    const mismatch =
+      'Endorsement subject failed because the endorsed account could not be matched to its discovered identity; verify endorsement DID discovery and identity mapping before serving hydrated pages.'
+    expect(() => buildEndorsedSubject(record)).toThrow(mismatch)
     expect(() =>
-      buildFeedItemView(record, {
+      buildEndorsedSubject(record, {
         endorsedActor: { ...endorsedActor, did: actorDid },
       }),
-    ).toThrow(
-      'Endorsement view failed because the endorsed account could not be matched to its discovered identity; verify endorsement DID discovery and identity mapping before serving hydrated pages.',
-    )
+    ).toThrow(mismatch)
   })
 
-  it('returns exact targets for evaluation and measurement', () => {
+  it('returns the evaluated record as the evaluation subject and every measured record in measurement content', () => {
     const evaluation = validated(
-      'evaluation.create',
+      'evaluation',
       'org.hypercerts.context.evaluation',
       {
         ...records.evaluation,
@@ -530,128 +494,114 @@ describe('feed-card view builders', () => {
       },
     )
     const measurement = validated(
-      'measurement.create',
+      'measurement',
       'org.hypercerts.context.measurement',
       {
         ...records.measurement,
-        subjects: [strongRef(), strongRef(`${targetUri}-ignored`, secondCid)],
+        subjects: [strongRef(), strongRef(`${targetUri}-2`, secondCid)],
       },
     )
-    expect(buildFeedItemView(evaluation)).toEqual({
+    expect(buildRecordSubject(evaluation)).toEqual({
+      $type: 'org.hypercerts.feed.defs#recordView',
+      uri: targetUri,
+      cid,
+    })
+    expect(buildItemContent(evaluation)).toEqual({
       $type: 'org.hypercerts.feed.defs#evaluationView',
       summary: 'Strong evidence',
-      createdAt,
-      target: { uri: targetUri, cid },
     })
-    expect(buildFeedItemView(measurement)).toEqual({
+    expect(buildItemContent(measurement)).toEqual({
       $type: 'org.hypercerts.feed.defs#measurementView',
       metric: 'hectares restored',
-      createdAt,
-      target: { uri: targetUri, cid },
+      subjects: [
+        { uri: targetUri, cid },
+        { uri: `${targetUri}-2`, cid: secondCid },
+      ],
     })
-    for (const view of [
-      buildFeedItemView(evaluation),
-      buildFeedItemView(measurement),
-    ]) {
-      expect(view).not.toHaveProperty('subject')
-      expect(view).not.toHaveProperty('subjects')
-      expect(view).not.toHaveProperty('measurements')
-    }
+    // A measurement lists its subjects in content; only a single-subject record has an item subject.
+    expect(buildRecordSubject(measurement)).toBeUndefined()
+    expect(buildEndorsedSubject(measurement)).toBeUndefined()
   })
 
-  it('selects the first image blob for updates and ignores URIs and non-images', () => {
-    const record = validated(
-      'update.create',
-      'org.hypercerts.context.attachment',
-      {
-        ...records.update,
-        shortDescription: 'Photos and supporting documents',
-        subjects: [strongRef(), strongRef(`${targetUri}-ignored`, secondCid)],
-        content: [
-          smallBlob('application/pdf'),
-          uriImage('https://example.com/arbitrary.png'),
-          { $type: 'example.future#attachment', value: 'future' },
-          smallBlob('image/webp', secondBlobCid),
-          smallBlob('image/png', blobCid),
-        ],
-      },
-    )
+  it('selects the first image blob for updates, ignores URIs and non-images, and lists every subject', () => {
+    const record = validated('update', 'org.hypercerts.context.attachment', {
+      ...records.update,
+      shortDescription: 'Photos and supporting documents',
+      subjects: [strongRef(), strongRef(`${targetUri}-ignored`, secondCid)],
+      content: [
+        smallBlob('application/pdf'),
+        uriImage('https://example.com/arbitrary.png'),
+        { $type: 'example.future#attachment', value: 'future' },
+        smallBlob('image/webp', secondBlobCid),
+        smallBlob('image/png', blobCid),
+      ],
+    })
 
-    expect(buildFeedItemView(record)).toEqual({
+    expect(buildItemContent(record)).toEqual({
       $type: 'org.hypercerts.feed.defs#updateView',
       title: 'Field report',
       shortDescription: 'Photos and supporting documents',
       image: protocolValue(smallBlob('image/webp', secondBlobCid)),
-      createdAt,
-      target: { uri: targetUri, cid },
+      subjects: [
+        { uri: targetUri, cid },
+        { uri: `${targetUri}-ignored`, cid: secondCid },
+      ],
     })
   })
 
-  it('maps all seven feed kinds exhaustively to the six public view variants', () => {
+  it('maps all seven feed kinds exhaustively to five content variants, none for an endorsement', () => {
     const cases = {
-      'cert.create': {
+      cert: {
         collection: 'org.hypercerts.claim.activity',
         value: records.activity,
         expectedType: 'org.hypercerts.feed.defs#activityView',
       },
-      'collection.create': {
+      collection: {
         collection: 'org.hypercerts.collection',
         value: records.collection,
         expectedType: 'org.hypercerts.feed.defs#collectionView',
       },
-      'project.created_with_cert': {
+      'project-with-cert': {
         collection: 'org.hypercerts.collection',
         value: records.collection,
         expectedType: 'org.hypercerts.feed.defs#collectionView',
       },
-      'evaluation.create': {
+      evaluation: {
         collection: 'org.hypercerts.context.evaluation',
         value: records.evaluation,
         expectedType: 'org.hypercerts.feed.defs#evaluationView',
       },
-      'measurement.create': {
+      measurement: {
         collection: 'org.hypercerts.context.measurement',
         value: records.measurement,
         expectedType: 'org.hypercerts.feed.defs#measurementView',
       },
-      'update.create': {
+      update: {
         collection: 'org.hypercerts.context.attachment',
         value: records.update,
         expectedType: 'org.hypercerts.feed.defs#updateView',
       },
-      'endorsement.award': {
+      endorsement: {
         collection: 'app.certified.badge.award',
         value: records.endorsement,
-        expectedType: 'org.hypercerts.feed.defs#endorsementView',
-        endorsedActor,
+        expectedType: undefined,
       },
     } satisfies Record<
       FeedKind,
       {
         readonly collection: string
         readonly value: unknown
-        readonly expectedType: string
-        readonly endorsedActor?: ActorSummary
+        readonly expectedType: string | undefined
       }
     >
 
     expect(
-      FEED_KINDS.map((kind) => {
-        const testCase = cases[kind]
-        const subjectActor =
-          'endorsedActor' in testCase ? testCase.endorsedActor : undefined
-        return {
-          kind,
-          viewType: buildFeedItemView(
-            validated(kind, testCase.collection, testCase.value),
-            {
-              ...(subjectActor === undefined
-                ? {}
-                : { endorsedActor: subjectActor }),
-            },
-          ).$type,
-        }
-      }),
+      FEED_KINDS.map((kind) => ({
+        kind,
+        viewType: buildItemContent(
+          validated(kind, cases[kind].collection, cases[kind].value),
+        )?.$type,
+      })),
     ).toEqual(
       FEED_KINDS.map((kind) => ({
         kind,
@@ -661,16 +611,15 @@ describe('feed-card view builders', () => {
   })
 
   it('omits unknown open-union activity images without rejecting the record', () => {
-    const record = validated('cert.create', 'org.hypercerts.claim.activity', {
+    const record = validated('cert', 'org.hypercerts.claim.activity', {
       ...records.activity,
       image: { $type: 'example.future#image', value: 'future' },
     })
 
-    expect(buildFeedItemView(record)).toEqual({
+    expect(buildItemContent(record)).toEqual({
       $type: 'org.hypercerts.feed.defs#activityView',
       title: 'Restore the watershed',
       shortDescription: 'Native forest restoration',
-      createdAt,
       locationCount: 0,
     })
   })

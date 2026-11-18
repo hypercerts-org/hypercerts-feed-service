@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "procedure",
-      "description": "Builds an ordered feed skeleton from current indexed records for the registered feed and parameters selected in the request. Authentication is optional. When supplied, the AT Protocol service-auth issuer is the viewer and may omit params.viewerDid; anonymous requests must provide it. The caller hydrates returned AT-URIs separately.",
+      "description": "Builds an ordered feed skeleton from current indexed records for the registered feed and parameters selected in the request. Each item is the AT-URI of the item's own record and nothing else. Authentication is optional. When supplied, the AT Protocol service-auth issuer is the viewer and may omit params.viewerDid; anonymous requests must provide it. The caller hydrates returned AT-URIs separately.",
       "errors": [
         {
           "name": "InvalidRequest",
@@ -51,7 +51,7 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 100,
-              "description": "Maximum number of feed subjects to return. The selected feed determines the default and may enforce a lower maximum."
+              "description": "Maximum number of feed items to return. The selected feed determines the default and may enforce a lower maximum."
             },
             "cursor": {
               "type": "string",
@@ -64,13 +64,16 @@
       "output": {
         "encoding": "application/json",
         "schema": {
-          "description": "Returns ordered, unhydrated feed subjects and an optional cursor for the next page.",
+          "description": "Returns ordered, unhydrated feed items and an optional cursor for the next page.",
           "type": "object",
           "required": ["feed"],
           "properties": {
             "feed": {
               "type": "array",
-              "items": { "type": "ref", "ref": "#feedSkeletonItem" }
+              "items": {
+                "type": "ref",
+                "ref": "org.hypercerts.feed.defs#skeletonItem"
+              }
             },
             "cursor": {
               "type": "string",
@@ -78,18 +81,6 @@
               "description": "Cursor for the next page. Omitted when no later page is known."
             }
           }
-        }
-      }
-    },
-    "feedSkeletonItem": {
-      "type": "object",
-      "required": ["subject"],
-      "description": "One unhydrated record selected for the feed.",
-      "properties": {
-        "subject": {
-          "type": "string",
-          "format": "at-uri",
-          "description": "AT-URI of the record to hydrate."
         }
       }
     }

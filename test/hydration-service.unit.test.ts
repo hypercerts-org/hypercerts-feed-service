@@ -15,6 +15,7 @@ import {
 } from '../src/feed/types.js'
 import { HydratedFeedService } from '../src/hydration/service.js'
 import type { ActorContext, IdentityReader } from '../src/hydration/types.js'
+import { $output } from '../src/lexicons/org/hypercerts/feed/getFeed.js'
 
 const viewerDid = 'did:plc:ar7c4by46qjdydhdevvrndac'
 const authorDid = 'did:plc:ewvi7nxzyoun6zhxrhs64oiz'
@@ -61,7 +62,7 @@ const sourceRow = (
   cid,
   actorDid: authorDid,
   collection: 'org.hypercerts.claim.activity',
-  kind: 'cert.create',
+  kind: 'cert',
   sortValue: '2026-07-20T00:00:03.000000Z',
   sourceValue: {
     $type: 'org.hypercerts.claim.activity',
@@ -150,7 +151,7 @@ const populatedPage = (): InternalFeedPage<InternalSourceFeedRow> => ({
       uri: invalidUri,
       actorDid: invalidAuthorDid,
       collection: 'org.hypercerts.collection',
-      kind: 'collection.create',
+      kind: 'collection',
       sortValue: '2026-07-20T00:00:02.000000Z',
       sourceValue: {
         $type: 'org.hypercerts.collection',
@@ -160,7 +161,7 @@ const populatedPage = (): InternalFeedPage<InternalSourceFeedRow> => ({
     sourceRow({
       uri: endorsementUri,
       collection: 'app.certified.badge.award',
-      kind: 'endorsement.award',
+      kind: 'endorsement',
       sortValue: '2026-07-20T00:00:01.000000Z',
       sourceValue: {
         $type: 'app.certified.badge.award',
@@ -192,52 +193,49 @@ describe('HydratedFeedService', () => {
     expect(pages.calls).toEqual([{ input, mode: 'with-source' }])
     expect(identities.calls).toEqual([[authorDid, endorsedDid]])
     expect(output.cursor).toBe(cursor)
-    expect(output.feed.map((item) => item.subject)).toEqual([
+    expect(output.feed.map((item) => item.uri)).toEqual([
       activityUri,
       endorsementUri,
     ])
     expect(output.feed[0]).toEqual({
-      subject: activityUri,
-      view: {
-        $type: 'org.hypercerts.feed.defs#hypercertsFeedView',
-        kind: 'cert.create',
-        actor: {
-          did: authorDid,
-          displayName: 'Certified Author',
-        },
-        content: {
-          $type: 'org.hypercerts.feed.defs#activityView',
-          title: 'Restore the watershed',
-          shortDescription: 'Native forest restoration',
-          createdAt,
-          locationCount: 0,
-        },
+      uri: activityUri,
+      cid,
+      author: { did: authorDid, displayName: 'Certified Author' },
+      kind: 'cert',
+      // The value the page was ordered by, which the cursor encodes.
+      sortAt: '2026-07-20T00:00:03.000000Z',
+      createdAt,
+      content: {
+        $type: 'org.hypercerts.feed.defs#activityView',
+        title: 'Restore the watershed',
+        shortDescription: 'Native forest restoration',
+        locationCount: 0,
       },
     })
-    expect(output.feed[1]).toMatchObject({
-      subject: endorsementUri,
-      view: {
-        $type: 'org.hypercerts.feed.defs#hypercertsFeedView',
-        actor: { did: authorDid },
-        content: {
-          $type: 'org.hypercerts.feed.defs#endorsementView',
-          subject: { did: endorsedDid },
-        },
+    expect(output.feed[1]).toEqual({
+      uri: endorsementUri,
+      cid,
+      author: { did: authorDid, displayName: 'Certified Author' },
+      kind: 'endorsement',
+      sortAt: '2026-07-20T00:00:01.000000Z',
+      createdAt,
+      subject: {
+        $type: 'org.hypercerts.feed.defs#actorView',
+        did: endorsedDid,
       },
     })
 
     for (const item of output.feed) {
       expect(item).not.toHaveProperty('$type')
-      expect(item).not.toHaveProperty('id')
-      expect(item).not.toHaveProperty('feedTimestamp')
+      expect(item).not.toHaveProperty('view')
       expect(item).not.toHaveProperty('record')
-      expect(item).not.toHaveProperty('recordState')
       expect(item).not.toHaveProperty('actorDid')
-      expect(item.view.actor).not.toHaveProperty('profileSource')
     }
+    // The built items are what the procedure serves, so they must satisfy the Lexicon.
+    expect(() => $output.schema.$parse(output)).not.toThrow()
   })
 
-  it('returns target references without discovering or reading target identities', async () => {
+  it('lists measured records as references without discovering or reading their identities', async () => {
     const authorContext = allContexts().get(authorDid)
     if (authorContext === undefined) throw new Error('missing author fixture')
     const pages = new FakePages({
@@ -245,7 +243,7 @@ describe('HydratedFeedService', () => {
         sourceRow({
           uri: measurementUri,
           collection: 'org.hypercerts.context.measurement',
-          kind: 'measurement.create',
+          kind: 'measurement',
           sourceValue: {
             $type: 'org.hypercerts.context.measurement',
             metric: 'hectares restored',
@@ -270,13 +268,12 @@ describe('HydratedFeedService', () => {
 
     expect(identities.calls).toEqual([[authorDid]])
     expect(output.feed[0]).toMatchObject({
-      view: {
-        content: {
-          $type: 'org.hypercerts.feed.defs#measurementView',
-          target: { uri: targetUri, cid },
-        },
+      content: {
+        $type: 'org.hypercerts.feed.defs#measurementView',
+        subjects: [{ uri: targetUri, cid }],
       },
     })
+    expect(() => $output.schema.$parse(output)).not.toThrow()
   })
 
   it('drops an entirely invalid selected page, skips identities, and preserves its cursor bytes', async () => {
@@ -286,7 +283,7 @@ describe('HydratedFeedService', () => {
           uri: invalidUri,
           actorDid: invalidAuthorDid,
           collection: 'org.hypercerts.collection',
-          kind: 'collection.create',
+          kind: 'collection',
           sourceValue: {
             $type: 'org.hypercerts.collection',
             createdAt,
@@ -303,6 +300,93 @@ describe('HydratedFeedService', () => {
       cursor,
     })
     expect(identities.calls).toEqual([])
+  })
+
+  it('drops a record whose strong-reference URI the public output would reject, like any invalid source, and keeps the cursor', async () => {
+    const ref = (uri: string) => ({
+      $type: 'com.atproto.repo.strongRef',
+      uri,
+      cid,
+    })
+    const activityTarget = `at://${targetDid}/org.hypercerts.claim.activity`
+    const pages = new FakePages({
+      rows: [
+        sourceRow(),
+        // The record validator accepts a `..` record key and a query string; the output at-uri check does not.
+        sourceRow({
+          uri: measurementUri,
+          actorDid: invalidAuthorDid,
+          collection: 'org.hypercerts.context.measurement',
+          kind: 'measurement',
+          sourceValue: {
+            $type: 'org.hypercerts.context.measurement',
+            metric: 'hectares restored',
+            unit: 'ha',
+            value: '42',
+            subjects: [ref(targetUri), ref(`${activityTarget}/3k?x=1`)],
+            createdAt,
+          },
+        }),
+        sourceRow({
+          uri: `at://${invalidAuthorDid}/org.hypercerts.context.evaluation/evaluation`,
+          actorDid: invalidAuthorDid,
+          collection: 'org.hypercerts.context.evaluation',
+          kind: 'evaluation',
+          sourceValue: {
+            $type: 'org.hypercerts.context.evaluation',
+            evaluators: [{ $type: 'app.certified.defs#did', did: authorDid }],
+            summary: 'Strong evidence',
+            subject: ref(`${activityTarget}/..`),
+            createdAt,
+          },
+        }),
+      ],
+      cursor,
+    })
+    const identities = new FakeIdentities(allContexts())
+
+    const output = await new HydratedFeedService(pages, identities).getFeed(
+      feedRequest(),
+    )
+
+    expect(output.feed.map((item) => item.uri)).toEqual([activityUri])
+    expect(output.cursor).toBe(cursor)
+    // Only the kept record's author is looked up.
+    expect(identities.calls).toEqual([[authorDid]])
+    expect(() => $output.schema.$parse(output)).not.toThrow()
+  })
+
+  it('omits a createdAt the output format rejects, and drops a record whose startDate it rejects', async () => {
+    const activity = {
+      $type: 'org.hypercerts.claim.activity',
+      title: 'Restore the watershed',
+      shortDescription: 'Native forest restoration',
+      createdAt,
+    }
+    // The record validator accepts a datetime without a zone and a 24:00 time; the output format does not.
+    const noZone = '2026-07-21T10:00:00'
+    const pages = new FakePages({
+      rows: [
+        sourceRow({ sourceValue: { ...activity, createdAt: noZone } }),
+        sourceRow({
+          uri: invalidUri,
+          actorDid: invalidAuthorDid,
+          sourceValue: { ...activity, startDate: '2026-07-20T24:00:00Z' },
+        }),
+      ],
+      cursor,
+    })
+    const identities = new FakeIdentities(allContexts())
+
+    const output = await new HydratedFeedService(pages, identities).getFeed(
+      feedRequest(),
+    )
+
+    expect(output.feed.map((item) => item.uri)).toEqual([activityUri])
+    expect(output.feed[0]).not.toHaveProperty('createdAt')
+    expect(output.cursor).toBe(cursor)
+    expect(identities.calls).toEqual([[authorDid]])
+    expect(() => $output.schema.$parse(output)).not.toThrow()
   })
 
   it('skips identity retrieval for an empty page and preserves its cursor bytes', async () => {

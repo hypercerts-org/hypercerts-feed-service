@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "procedure",
-      "description": "Builds an ordered feed of per-record views from current indexed records for the registered feed and parameters selected in the request. Most feeds return hydrated views built from records and identities; the experimental MaEarth feed returns merge-metadata views only. Authentication is optional. When supplied, the AT Protocol service-auth issuer is the viewer and may omit params.viewerDid; anonymous requests must provide it.",
+      "description": "Builds an ordered feed of flat item views from current indexed records for the registered feed and parameters selected in the request. Each item identifies its own record (uri, cid), its author, its kind and the time it is ordered by, and may carry the record's subject, engagement counts and card content, depending on the feed. The Hypercerts feed hydrates authors and card content; the experimental MaEarth feed returns merge metadata and counts only. Authentication is optional. When supplied, the AT Protocol service-auth issuer is the viewer and may omit params.viewerDid; anonymous requests must provide it.",
       "errors": [
         {
           "name": "InvalidRequest",
@@ -51,7 +51,7 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 100,
-              "description": "Maximum number of feed subjects to return. The selected feed determines the default and may enforce a lower maximum."
+              "description": "Maximum number of feed items to return. The selected feed determines the default and may enforce a lower maximum."
             },
             "cursor": {
               "type": "string",
@@ -64,7 +64,7 @@
       "output": {
         "encoding": "application/json",
         "schema": {
-          "description": "Returns ordered feed entries, each with a feed-specific view, and an optional cursor for the next page.",
+          "description": "Returns ordered feed items and an optional cursor for the next page.",
           "type": "object",
           "required": ["feed"],
           "properties": {
@@ -72,7 +72,7 @@
               "type": "array",
               "items": {
                 "type": "ref",
-                "ref": "#feedItem"
+                "ref": "org.hypercerts.feed.defs#itemView"
               }
             },
             "cursor": {
@@ -81,27 +81,6 @@
               "description": "Cursor for the next page. Omitted when no later page is known."
             }
           }
-        }
-      }
-    },
-    "feedItem": {
-      "type": "object",
-      "required": ["subject", "view"],
-      "description": "One record selected for the feed together with its feed-specific view: hydrated content, or merge metadata for the experimental MaEarth feed.",
-      "properties": {
-        "subject": {
-          "type": "string",
-          "format": "at-uri",
-          "description": "AT-URI of the source record represented by this entry."
-        },
-        "view": {
-          "type": "union",
-          "closed": false,
-          "refs": [
-            "org.hypercerts.feed.defs#hypercertsFeedView",
-            "org.hypercerts.feed.defs#maearthFeedView"
-          ],
-          "description": "View produced by the selected feed. Clients must tolerate unknown variants."
         }
       }
     }

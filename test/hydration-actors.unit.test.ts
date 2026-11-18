@@ -9,7 +9,7 @@ import {
   isMeaningfulCertifiedProfile,
   validateCertifiedProfile,
 } from '../src/hydration/validation.js'
-import { buildActorSummary } from '../src/hydration/views.js'
+import { buildActorView } from '../src/hydration/views.js'
 
 const didA = 'did:plc:abcdefghijklmnopqrstuvwx'
 const didB = 'did:plc:zyxwvutsrqponmlkjihgfedc'
@@ -243,7 +243,7 @@ describe('Certified profile validation', () => {
     )
 
     expect(validated).toBeDefined()
-    expect(buildActorSummary(didA, validated)).toEqual({ did: didA })
+    expect(buildActorView(didA, validated)).toEqual({ did: didA })
   })
 
   it('treats all six supported fields as meaningful only after validation', () => {
@@ -275,13 +275,13 @@ describe('Certified profile validation', () => {
   })
 })
 
-describe('buildActorSummary', () => {
+describe('buildActorView', () => {
   it('projects display and avatar fields from a meaningful Certified profile', () => {
     const certified = validateCertifiedProfile(
       profile({ displayName: 'Certified Alice' }),
     )
 
-    expect(buildActorSummary(didA, certified)).toEqual({
+    expect(buildActorView(didA, certified)).toEqual({
       did: didA,
       displayName: 'Certified Alice',
     })
@@ -300,7 +300,7 @@ describe('buildActorSummary', () => {
     ]
 
     for (const certified of profiles) {
-      expect(buildActorSummary(didA, certified)).toEqual({ did: didA })
+      expect(buildActorView(didA, certified)).toEqual({ did: didA })
     }
   })
 
@@ -317,11 +317,11 @@ describe('buildActorSummary', () => {
       JSON.parse(JSON.stringify(profile({ avatar: blobImage() }))),
     )
 
-    expect(buildActorSummary(didA, uriProfile).avatar).toEqual({
+    expect(buildActorView(didA, uriProfile).avatar).toEqual({
       $type: 'org.hypercerts.defs#uri',
       uri: 'https://example.com/avatar.png',
     })
-    expect(buildActorSummary(didA, blobProfile).avatar).toEqual(
+    expect(buildActorView(didA, blobProfile).avatar).toEqual(
       protocolValue(blobImage()),
     )
   })
