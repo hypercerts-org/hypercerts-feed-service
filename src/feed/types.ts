@@ -21,15 +21,15 @@ export const FEED_COLLECTIONS = [
   'app.certified.badge.award',
 ] as const
 
-/** Final event classifications exposed by the Hypercerts hydrated view. */
+/** Final event classifications exposed as the Hypercerts feed's item `kind`. */
 export const FEED_KINDS = [
-  'cert.create',
-  'collection.create',
-  'project.created_with_cert',
-  'evaluation.create',
-  'measurement.create',
-  'update.create',
-  'endorsement.award',
+  'cert',
+  'collection',
+  'project-with-cert',
+  'evaluation',
+  'measurement',
+  'endorsement',
+  'update',
 ] as const
 
 /** A supported interpretation of an indexed source record. */
@@ -92,10 +92,10 @@ export interface GetFeedSkeletonInput {
   readonly cursor?: string
 }
 
-/** One unhydrated record selected for the feed. */
+/** One unhydrated record selected for the feed: the item's own record. */
 export interface FeedSkeletonItem {
   /** AT-URI of the record that the downstream data plane should hydrate. */
-  readonly subject: string
+  readonly uri: string
 }
 
 /** Public response body from org.hypercerts.feed.getFeedSkeleton. */

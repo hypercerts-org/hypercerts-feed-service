@@ -428,18 +428,18 @@ classified_events AS (
     source.collection,
     source.did AS actor_did,
     CASE source.collection
-      WHEN 'org.hypercerts.claim.activity' THEN 'cert.create'
+      WHEN 'org.hypercerts.claim.activity' THEN 'cert'
       WHEN 'org.hypercerts.collection' THEN
         CASE
           WHEN EXISTS (
             SELECT 1 FROM paired_collections WHERE paired_collections.uri = source.uri
-          ) THEN 'project.created_with_cert'
-          ELSE 'collection.create'
+          ) THEN 'project-with-cert'
+          ELSE 'collection'
         END
-      WHEN 'org.hypercerts.context.evaluation' THEN 'evaluation.create'
-      WHEN 'org.hypercerts.context.measurement' THEN 'measurement.create'
-      WHEN 'org.hypercerts.context.attachment' THEN 'update.create'
-      WHEN 'app.certified.badge.award' THEN 'endorsement.award'
+      WHEN 'org.hypercerts.context.evaluation' THEN 'evaluation'
+      WHEN 'org.hypercerts.context.measurement' THEN 'measurement'
+      WHEN 'org.hypercerts.context.attachment' THEN 'update'
+      WHEN 'app.certified.badge.award' THEN 'endorsement'
     END AS kind,
     source.effective_at
   FROM eligible_records AS source
