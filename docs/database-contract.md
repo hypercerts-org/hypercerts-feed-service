@@ -27,7 +27,13 @@ happyview_labels.uri            text
 happyview_labels.val            text
 happyview_labels.cts            text (timestamp text)
 happyview_labels.exp            text, nullable (timestamp text)
+
+happyview_record_refs.source_uri  text, the referencing record's URI (foreign key to happyview_records, ON DELETE CASCADE)
+happyview_record_refs.target_uri  text, an at:// string found anywhere in the source record
+happyview_record_refs.collection  text, the SOURCE record's collection
 ```
+
+`happyview_record_refs` is read only by the experimental MaEarth feed, for counts (see [Reaction counts](#reaction-counts-and-happyview_record_refs)). Its primary key is `(source_uri, target_uri)`, and the read relies on HappyView's index `idx_record_refs_target` on `(target_uri, collection)`.
 
 `happyview_labels` has a primary key on `(src, uri, val)`. The feed does not read an `actor` table. Record reads use `uri`, `did`, `collection`, `record`, `cid`, and `indexed_at`; `created_at` is HappyView's database-ingestion timestamp and is not a feed timestamp. The integration fixture uses `rkey` and supplies a TEXT `created_at` value because the migration removes its default.
 
@@ -35,7 +41,7 @@ The adapter expects HappyView's prefixed table names. Migration `20260318000000_
 
 ## Read-only access
 
-Use a dedicated role with `SELECT` only on the two runtime tables. `default_transaction_read_only=on` is defense in depth, not a replacement for grants.
+Use a dedicated role with `SELECT` only on the runtime tables: `happyview_records` and `happyview_labels`, plus `happyview_record_refs` when `MAEARTH_FEED_ENABLED=true` (without it, MaEarth `getFeed` fails with a permission error). `default_transaction_read_only=on` is defense in depth, not a replacement for grants.
 
 ```sql
 CREATE ROLE hypercerts_feed_reader LOGIN PASSWORD '<managed-secret>';
@@ -43,21 +49,24 @@ GRANT CONNECT ON DATABASE happyview TO hypercerts_feed_reader;
 GRANT USAGE ON SCHEMA public TO hypercerts_feed_reader;
 GRANT SELECT ON TABLE public.happyview_records, public.happyview_labels
   TO hypercerts_feed_reader;
+-- Only when MAEARTH_FEED_ENABLED=true: the MaEarth like, repost and reply counts.
+GRANT SELECT ON TABLE public.happyview_record_refs TO hypercerts_feed_reader;
 ALTER ROLE hypercerts_feed_reader SET default_transaction_read_only = on;
 ```
 
-Before configuring `DATABASE_URL`, verify using that login that it can connect, select both tables, and reports a read-only session. Keep the database private to the service network.
+Before configuring `DATABASE_URL`, verify using that login that it can connect, select every table it needs, and reports a read-only session. Keep the database private to the service network.
 
 ## Feed records and identity
 
 Feed selection reads current rows from `happyview_records`. The service does not query PDS, AppView, HappyView APIs, or actor-status tables. A missing source row produces no feed event; there is no history or snapshot guarantee across requests.
 
-The supported source collections are listed below. `app.certified.graph.entityFollow` and `app.certified.feed.repost` are read only by the experimental MaEarth feed (see [the MaEarth section of the API reference](api.md#maearth-following-feed-experimental)). MaEarth also reads `app.certified.graph.follow`, `org.hypercerts.context.attachment` and `org.hypercerts.collection`, which the Hypercerts feed uses too; the remaining collections serve only the Hypercerts feed.
+The supported source collections are listed below. `app.certified.graph.entityFollow`, `app.certified.feed.repost` and `app.certified.feed.like` (counts only) are read only by the experimental MaEarth feed (see [the MaEarth section of the API reference](api.md#maearth-following-feed-experimental)). MaEarth also reads `app.certified.graph.follow`, `org.hypercerts.context.attachment` and `org.hypercerts.collection`, which the Hypercerts feed uses too; the remaining collections serve only the Hypercerts feed.
 
 ```text
 app.certified.graph.follow
 app.certified.graph.entityFollow
 app.certified.feed.repost
+app.certified.feed.like
 app.certified.actor.organization
 app.certified.actor.profile
 app.certified.badge.award
@@ -94,9 +103,9 @@ Skeleton pages expose URI-only subjects. Hydrated pages validate the selected so
 
 ## Experimental MaEarth selection
 
-`src/feed/maearth-query.sql` reads current `org.hypercerts.context.attachment`, `app.certified.graph.follow`, `app.certified.graph.entityFollow`, `app.certified.feed.repost` and `org.hypercerts.collection` records. Its viewer graph, project resolution, event selection, timestamp normalization and keyset pagination share one statement. Both endpoints use the same selection; source-aware mode projects only MaEarth merge metadata from that statement, not raw source JSON. It requires no source rejoin, profile batch, quality labels or API calls. Beyond the selected records it reads only `org.hypercerts.collection` records by primary key: the viewer's followed projects (to resolve scope) and the collections named by followed accounts' entity follows (to check they are projects); it never reads repost targets or post subjects. The Hypercerts exact-source/hydration rules above remain specific to the Hypercerts algorithm.
+`src/feed/maearth-query.sql` reads current `org.hypercerts.context.attachment`, `app.certified.graph.follow`, `app.certified.graph.entityFollow`, `app.certified.feed.repost` and `org.hypercerts.collection` records. Its viewer graph, project resolution, event selection, timestamp normalization and keyset pagination share one statement. Both endpoints use the same selection; source-aware mode projects only MaEarth merge metadata from that statement, not raw source JSON. It requires no source rejoin, profile batch, quality labels or API calls. Beyond the selected records it reads only `org.hypercerts.collection` records by primary key: the viewer's followed projects (to resolve scope) and the collections named by followed accounts' entity follows (to check they are projects); it never reads repost targets or post subjects. For `getFeed` only, it also reads the like, repost and comment-attachment records that `happyview_record_refs` lists as mentioning the page's posts, to count them (next section). The Hypercerts exact-source/hydration rules above remain specific to the Hypercerts algorithm.
 
-**Operator prerequisite.** The service never ingests. HappyView must have the lexicons for all five collections above installed and subscribed, and the records backfilled. A missing lexicon, subscription or backfill silently yields no rows for that kind or project; `GET /ready` does not detect it. Enable the feed with `MAEARTH_FEED_ENABLED=true` only after confirming this.
+**Operator prerequisite.** The service never ingests. HappyView must have the lexicons for all five collections above, and `app.certified.feed.like` for like counts, installed and subscribed, and the records backfilled. A missing lexicon, subscription or backfill silently yields no rows for that kind or project, or counts of 0; `GET /ready` does not detect it. Enable the feed with `MAEARTH_FEED_ENABLED=true` only after confirming this.
 
 Read rules specific to this feed:
 
@@ -107,7 +116,77 @@ Read rules specific to this feed:
 - **Timestamps.** The effective timestamp must be 0001-01-01T00:00:00Z or later. An unparseable `createdAt`, or one before year 1 in UTC, falls back to `indexed_at` under the same guards; if that is also before year 1 or invalid the row is excluded. A row whose effective timestamp is later than the database's `statement_timestamp()` plus five minutes is excluded and never re-dated, so returned values never exceed year 9999: a `createdAt` that parses as a real future timestamp, including one beyond year 9999 after its offset, does not fall back to `indexed_at`. The Hypercerts feed applies no such cutoff.
 - **Repost targets.** A repost's `subject.uri` must be an `org.hypercerts.context.attachment` AT-URI that passes output validation: a record key of 1–512 characters that is neither `.` nor `..`, and an authority DID of at most 2048 characters. Its `subject.cid` must be a non-empty string. Other reposts are excluded, so a malformed target cannot fail a page.
 - **Follow targets.** `projectFollow` rows return the followed project URI (the `subject.uri` that resolved to a project) and `accountFollow` rows the followed DID (the follow `subject`), both from the records already read. A follow `subject` longer than 2048 characters is not a DID and is excluded.
+- **Counts.** `post` and `repost` items carry like, repost and reply counts; follows carry none (see below).
 - **Reads.** Author-driven rows are read by `(did, collection)`; target-driven rows (strangers' follows of followed accounts or projects, and posts about followed projects) scan the selected collections. See [MaEarth query shape](api.md#query-shape-and-performance) for limits. The service creates no indexes.
+
+## Reaction counts and `happyview_record_refs`
+
+MaEarth `getFeed` counts reactions to each page's posts in the same statement, after pagination, for at most `limit + 1` posts. A `post` item counts itself and a `repost` item counts its original post (`repostedPostUri`); follows have no counts. The skeleton skips the lookup. The lookup runs in two steps:
+
+1. Candidates come from `happyview_record_refs` by `(target_uri, collection)`, restricted to the like, repost and attachment collections. A refs row exists for every `at://` string at any depth of a record, not only the field that makes it a reaction, so a row is only a candidate.
+2. Each candidate's source record is read from `happyview_records` by primary key, decoded under the usual guard, and re-checked:
+   - **Like or repost:** `$type` equals the collection and `subject.uri` equals the post. CID is ignored. A like that names the post only in `via` is dropped. Counted once per author DID.
+   - **Reply:** `$type` equals the collection, `contentType` is `comment`, and the post is among the `subjects[].uri` values (a non-array `subjects` has none). Every such record counts, not distinct authors. Only direct replies count: a comment on a comment lists the comment, not the post.
+
+These are the rules of the api.hypercerts.dev `getReactionCounts` and `getCommentCounts` endpoints, plus the `$type` check (those endpoints do not make it) and guarded JSON decoding (they cast `record::jsonb` unguarded).
+
+**The refs table must be complete.** The service trusts it to find candidates; a record missing from it is never counted. HappyView writes refs best-effort: failures of the write are ignored, an update deletes and re-inserts a record's refs without a transaction, and the one-time fill at startup runs only when the table is empty, so a partly filled table is never repaired. A record indexed before HappyView added the table depends on that one-time fill. The service cannot detect or repair this: HappyView owns the table, and a rebuild is a HappyView action. Re-check it periodically on the HappyView database. This query only reads; the `READ ONLY` transaction enforces that:
+
+```sql
+BEGIN READ ONLY;
+SET LOCAL statement_timeout = '120s';
+
+-- Rows in the table at all.
+SELECT count(*) AS ref_rows FROM happyview_record_refs;
+
+-- Likes and reposts whose subject.uri has no refs row.
+WITH reaction AS (
+  SELECT source.uri, source.collection, decoded.value->'subject'->>'uri' AS target
+  FROM happyview_records AS source
+  CROSS JOIN LATERAL (
+    SELECT CASE WHEN pg_input_is_valid(source.record, 'jsonb')
+      THEN source.record::jsonb END AS value
+    OFFSET 0
+  ) AS decoded
+  WHERE source.collection IN ('app.certified.feed.like', 'app.certified.feed.repost')
+)
+SELECT collection, count(*) AS records,
+  count(*) FILTER (WHERE NOT EXISTS (
+    SELECT 1 FROM happyview_record_refs AS ref
+    WHERE ref.source_uri = reaction.uri AND ref.target_uri = reaction.target
+  )) AS missing
+FROM reaction
+WHERE target LIKE 'at://%'
+GROUP BY collection;
+
+-- Comment attachments whose subjects[].uri has no refs row.
+WITH reply AS (
+  SELECT source.uri, listed.value->>'uri' AS target
+  FROM happyview_records AS source
+  CROSS JOIN LATERAL (
+    SELECT CASE WHEN pg_input_is_valid(source.record, 'jsonb')
+      THEN source.record::jsonb END AS value
+    OFFSET 0
+  ) AS decoded
+  CROSS JOIN LATERAL jsonb_array_elements(
+    CASE WHEN jsonb_typeof(decoded.value->'subjects') = 'array'
+      THEN decoded.value->'subjects' ELSE '[]'::jsonb END
+  ) AS listed(value)
+  WHERE source.collection = 'org.hypercerts.context.attachment'
+    AND decoded.value->>'contentType' = 'comment'
+)
+SELECT count(*) AS links,
+  count(*) FILTER (WHERE NOT EXISTS (
+    SELECT 1 FROM happyview_record_refs AS ref
+    WHERE ref.source_uri = reply.uri AND ref.target_uri = reply.target
+  )) AS missing
+FROM reply
+WHERE target LIKE 'at://%';
+
+ROLLBACK;
+```
+
+A healthy table has `ref_rows` above zero and `missing = 0` in both result sets. Any `missing` above zero means counts undercount those posts until HappyView repairs the table. The integration fixture inserts refs rows itself, so the suite proves the count rules, not HappyView's refs ingestion. Index changes belong in HappyView and need production-shaped `EXPLAIN (ANALYZE, BUFFERS)` evidence; there is none for this lookup yet.
 
 ## Organization-quality labels
 

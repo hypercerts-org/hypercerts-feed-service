@@ -68,7 +68,7 @@ Every hydrated entry has a generic source `subject` and an open `view` union. Th
 
 ### What you get (Hypercerts feed)
 
-These guarantees apply to the Hypercerts feed. MaEarth entries carry metadata only, with no `actor` or `content`, and skip source hydration; see the MaEarth section below.
+These guarantees apply to the Hypercerts feed. MaEarth entries carry merge metadata and engagement counts only, with no `actor` or `content`, and skip source hydration; see the MaEarth section below.
 
 Every hydrated feed entry comes from a valid source record. Each entry has a feed-specific view and kind-specific content.
 
@@ -173,7 +173,7 @@ Source JSON is never returned.
 
 ## MaEarth Following feed (experimental)
 
-The feed is **off by default**. Set `MAEARTH_FEED_ENABLED=true` to register it. When it is `false`, unset or empty, the `feedId` is unregistered and a well-formed request returns `UnsupportedFeed` (a malformed one, such as an anonymous request without `viewerDid`, is still rejected earlier as `InvalidRequest`); a value other than `true` or `false` fails startup with an actionable error. HappyView must have the `org.hypercerts.context.attachment`, `app.certified.graph.follow`, `app.certified.graph.entityFollow`, `app.certified.feed.repost` and `org.hypercerts.collection` lexicons installed, subscribed and backfilled; otherwise those kinds silently return nothing and `GET /ready` will not say so (see [database-contract.md](database-contract.md#experimental-maearth-selection)).
+The feed is **off by default**. Set `MAEARTH_FEED_ENABLED=true` to register it. When it is `false`, unset or empty, the `feedId` is unregistered and a well-formed request returns `UnsupportedFeed` (a malformed one, such as an anonymous request without `viewerDid`, is still rejected earlier as `InvalidRequest`); a value other than `true` or `false` fails startup with an actionable error. HappyView must have the `org.hypercerts.context.attachment`, `app.certified.graph.follow`, `app.certified.graph.entityFollow`, `app.certified.feed.repost` and `org.hypercerts.collection` lexicons installed, subscribed and backfilled, plus `app.certified.feed.like` for like counts, and its `happyview_record_refs` table must be complete; otherwise those kinds silently return nothing, or counts silently undercount, and `GET /ready` will not say so (see [database-contract.md](database-contract.md#experimental-maearth-selection)).
 
 ### Contract
 
@@ -185,7 +185,7 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
 - Top-level `limit`: default 20, maximum 50. `cursor` is opaque and scoped to this feed.
 - Errors follow the Hypercerts feed: structurally invalid params (such as a malformed `viewerDid` or `actorDid`) and anonymous requests without `viewerDid` return HTTP 400; semantic errors (an unsupported `kinds` value or `limit` outside 1–50) return HTTP 422. Both use `InvalidRequest`.
 
-`getFeedSkeleton` stays URI-only. `getFeed` returns merge metadata in a new open view variant:
+`getFeedSkeleton` stays URI-only. `getFeed` returns merge metadata, plus like, repost and reply counts on post and repost items, in a new open view variant:
 
 ```json
 {
@@ -198,7 +198,10 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
         "createdAt": "2026-10-14T12:00:00.123456Z",
         "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
         "actorDid": "did:plc:dddddddddddddddddddddddd",
-        "repostedPostUri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.context.attachment/original"
+        "repostedPostUri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.context.attachment/original",
+        "likeCount": 4,
+        "repostCount": 2,
+        "replyCount": 0
       }
     },
     {
@@ -233,6 +236,15 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
 
 **Follow targets.** A `projectFollow` carries `followedProjectUri`, the followed `org.hypercerts.collection` URI that resolved to a `type` of `project`. An `accountFollow` carries `followedDid`, the DID in the follow record's subject. Each is absent for every other kind, and the follower is the item's `actorDid`, the authority of its `subject` URI. Both values come from the same statement and the same records already read to select the item, so they add no query or read. They are not cross-checked against the requester: a stranger's follow of a followed account names that followed account, and a followed account's follow names whomever it followed. The skeleton does not carry them. The fields are optional additions to the open view, so existing consumers are unaffected.
 
+**Counts.** `post` and `repost` items carry `likeCount`, `repostCount` and `replyCount`: always all three, `0` when there are none. Follow items carry none. A post counts itself. A repost counts its original post (`repostedPostUri`), not the repost record, so a repost and the post it repeats show the same numbers. The rules match `app.certified.feed.getReactionCounts` and `org.hypercerts.context.getCommentCounts` on api.hypercerts.dev:
+
+- Likes and reposts count distinct accounts: the current `app.certified.feed.like` or `app.certified.feed.repost` records whose `subject.uri` equals the post, CID ignored, counted once per author DID. A like that names the post only in `via` is not a like of it. A repost by someone the viewer does not follow counts too.
+- Replies count every current `org.hypercerts.context.attachment` with `contentType` `comment` that lists the post in `subjects[].uri`. Each comment counts, so one author's several comments count several times; a reply to a reply is not a reply to the post. An attachment of any other `contentType` that points at the post is not a reply.
+- Self-likes count, and so do replies that MaEarth hides; MaEarth subtracts what it hides.
+- A source record's `$type` must equal its collection. The api.hypercerts.dev endpoints do not check this, so the two can differ for a record with a mismatched `$type`.
+
+Counts are current state at response time, not a snapshot: they can change between pages, and they take no part in ordering or the cursor. The skeleton carries no counts and does not run the count lookup. They come from the same statement as the page, so a page costs no extra query.
+
 ### Selection
 
 The full current graph is resolved in SQL without the previous 500-account cap or per-DID calls:
@@ -256,7 +268,7 @@ The viewer's own graph edges can appear because their targets are followed. The 
 
 **Future-dated items are hidden.** A row whose effective timestamp is later than the database's statement time plus five minutes is dropped, whatever its kind, and whether it was author-driven or target-driven. The cutoff uses PostgreSQL's `statement_timestamp()` (one reading per statement) and a single named skew constant in `src/feed/maearth-query.sql`. Any `createdAt` that parses as a real future timestamp (2099, `9999-12-31T23:59:59Z`, or a value that lands beyond year 9999 after its offset) is excluded, **not** replaced by `indexed_at`; only an unparseable `createdAt`, or one before year 1, falls back, as above. An item whose only valid timestamp is a future `indexed_at` is also hidden. Hidden items are removed before the page limit is applied, so they never shorten a page or move the cursor. Because the cutoff moves with the clock, an item dated slightly in the future becomes visible once its time arrives, but only on a traversal that has not already paged past its position.
 
-One parameterized statement handles scope, selection and pagination for either endpoint. Sort order is effective timestamp descending, URI descending. MaEarth views require no profile query, source-body hydration, repost-target or post-subject reads, API calls, or backfilling of dropped items. The only records read beyond the selected ones are `org.hypercerts.collection` records looked up by primary key in the same statement: the viewer's followed projects (to resolve scope) and the collections named by followed accounts' entity follows (to check they are projects). Hypercerts selection and its existing view remain unchanged.
+One parameterized statement handles scope, selection and pagination for either endpoint. Sort order is effective timestamp descending, URI descending. MaEarth views require no profile query, source-body hydration, repost-target or post-subject reads, API calls, or backfilling of dropped items. The only records read beyond the selected ones are, in the same statement: `org.hypercerts.collection` records looked up by primary key (the viewer's followed projects, to resolve scope, and the collections named by followed accounts' entity follows, to check they are projects), and, for `getFeed` only, the like, repost and comment records that `happyview_record_refs` lists as mentioning the page's posts, looked up by primary key to be counted. Hypercerts selection and its existing view remain unchanged.
 
 ### Query shape and performance
 
@@ -267,6 +279,7 @@ One parameterized statement handles scope, selection and pagination for either e
 - **Target-driven rows** (other accounts' follows of followed accounts or projects, and other accounts' posts about followed projects) cannot be found by author. They are found by scanning the selected collection, decoding each record once behind a `MATERIALIZED` CTE, and keeping only rows that hit a followed target and are not already author-driven. **These branches still scan every record in their collections on every request.** Attachments can be large. They are skipped entirely when the corresponding target set is empty, and for any kind that the `kinds` filter excludes.
 - The `kinds` filter is applied before any record is read: a single-kind request reads only that kind's collection (plus the viewer's graph and project lookups).
 - Authored follow items must also resolve their project target, by one primary-key lookup per candidate.
+- **Counts** (`getFeed` only) run after pagination, for the page's at most `limit + 1` counted posts. `happyview_record_refs`, indexed on `(target_uri, collection)`, lists the like, repost and attachment records that mention each URI anywhere in the record; each hit's source record is fetched by primary key and decoded to re-check its type and field. This adds no query, and the work grows with the reactions to the page's posts (a very popular post is read reaction by reaction), not with the page size or the number of followed accounts.
 
 The planner decides the physical plan. There is **no `EXPLAIN (ANALYZE, BUFFERS)` evidence on production-shaped data**, so no latency or capacity claim is made. Before any shared deployment, capture it against a copy with production-like row counts, large attachments, and the deployment's own `jit` setting. A local synthetic check suggests the estimated cost of this statement can exceed PostgreSQL's default `jit_above_cost`, in which case JIT compilation, not row processing, can dominate; confirm and, if needed, disable JIT for the feed's read-only role. The service never creates indexes: if the target-driven scans prove too costly, the follow-up is a HappyView-owned index or projection (for example by follow subject or by attachment subject), not a change here.
 
@@ -274,13 +287,14 @@ The planner decides the physical plan. There is **no `EXPLAIN (ANALYZE, BUFFERS)
 
 - **Author-controlled timestamps within the skew.** Far-future items can no longer pin themselves to the top, but an item may still claim any time up to five minutes ahead of the database clock, and a backdated `createdAt` sorts wherever its author says. MaEarth merges by `createdAt`, so such an item can briefly float above its own gifts. Target-driven rows keep this open to any account that follows a followed account or project, or posts about a followed project. (Any account can likewise place a post about any project into its followers' feeds; MaEarth's own visibility filtering is the control.) Only the database clock is read. The five-minute skew assumes it is reasonably accurate; a database clock running more than that behind its writers would hide valid items.
 - **The Hypercerts feed still has the far-future exposure.** `src/feed/feed-query.sql` accepts any valid in-range `createdAt`, including 2099, so a far-future item pins to the top of that feed until removed. Open question: decide whether the Hypercerts feed should adopt the same cutoff, which would change its public ordering semantics and its tests.
+- **Counts depend on a complete `happyview_record_refs`.** HappyView ignores errors when writing it and refills it only when it is empty, so a failed write silently undercounts a post. [database-contract.md](database-contract.md#reaction-counts-and-happyview_record_refs) has a read-only query to re-check it periodically.
 - `actorDid` only narrows the viewer's Following scope; it cannot serve a public profile page for someone the viewer does not follow.
 
 ### Not covered
 
 - Gifts, donation rollups, For you discovery/fallback, funding rounds and unrestricted public profile feeds.
 - MaEarth privacy, mutes, hidden posts, public-profile eligibility for reposts, announcements, organization/person distinctions, and attachment-to-project mapping. These require MaEarth's database; inclusion here does not imply visibility there.
-- Reaction counts, viewer reactions, follower totals or Follow-button state.
+- Viewer reactions (whether the viewer liked or reposted an item), follower totals and Follow-button state. Counts cover only likes, reposts and direct replies on post and repost items.
 - Production scale or latency guarantees. The 505-account check proves no truncation, not performance.
 - Live PDS-issued JWTs and public DID resolution. Viewer binding is unit-tested only.
 - Labels and moderation ingestion. MaEarth selection does not consume organization quality labels.

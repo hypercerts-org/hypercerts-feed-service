@@ -75,7 +75,7 @@ params: {
 }
 ```
 
-`getFeed` items carry metadata only. There is no hydrated actor profile or content, because MaEarth hydrates items itself:
+`getFeed` items carry metadata and counts only. There is no hydrated actor profile or content, because MaEarth hydrates items itself:
 
 ```ts
 {
@@ -89,11 +89,13 @@ params: {
     repostedPostUri?, // repost only
     followedProjectUri?, // projectFollow only
     followedDid?, // accountFollow only
+    likeCount?, repostCount?, replyCount?, // post and repost only; always all three, 0 when none
   },
 }
 ```
 
 - Posts are `org.hypercerts.context.attachment` records.
+- Counts: likes and reposts are distinct accounts, replies are every direct comment (not replies to replies). A repost item shows its original post's counts. Follows have no counts, and `getFeedSkeleton` has none. They are current state, so they can change between pages.
 - Projects are `org.hypercerts.collection` records of type `project`.
 - A repost appears only if the reposter is someone the viewer follows. The viewer's own reposts never appear.
 - The service does not apply MaEarth's privacy or hidden-post rules. MaEarth must filter items before showing them.
