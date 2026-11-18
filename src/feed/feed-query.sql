@@ -4,7 +4,13 @@ timestamp_patterns AS NOT MATERIALIZED (
     '^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$'::text AS rfc3339_timestamp_pattern,
     '-00:00$'::text AS rfc3339_unknown_offset_suffix_pattern,
     '^[0-9]{4}-[0-9]{2}-[0-9]{2} ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]+)?[+-]([01][0-9]|2[0-3])(:[0-5][0-9](:[0-5][0-9])?)?$'::text AS postgres_timestamp_pattern,
-    '-00(:00(:00)?)?$'::text AS postgres_unknown_offset_suffix_pattern
+    '-00(:00(:00)?)?$'::text AS postgres_unknown_offset_suffix_pattern,
+    -- The effective timestamp is returned as sortAt and encoded in the cursor, and both must be
+    -- valid four-digit-year atproto datetimes. Selected rows are bounded to years 0001 through
+    -- 9999 UTC; a createdAt whose UTC instant lies outside (an offset can push 9999-12-31 into
+    -- year 10000) excludes the row instead of falling back to indexed_at.
+    timestamptz '0001-01-01 00:00:00+00' AS earliest_effective_at,
+    timestamptz '10000-01-01 00:00:00+00' AS effective_at_end
 ),
 -- =============================================================================
 -- Scope resolution
@@ -396,6 +402,8 @@ eligible_records AS (
     ) AS effective_at
   ) AS source_time
   WHERE source_time.effective_at IS NOT NULL
+    AND source_time.effective_at >= timestamp_pattern.earliest_effective_at
+    AND source_time.effective_at < timestamp_pattern.effective_at_end
     AND (
       source.collection <> 'org.hypercerts.claim.activity'
       OR NOT EXISTS (

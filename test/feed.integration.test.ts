@@ -16,6 +16,8 @@ import {
   type GetFeedSkeletonInput,
 } from '../src/feed/types.js'
 import { PostgresIdentityReader } from '../src/hydration/identity.js'
+import { HydratedFeedService } from '../src/hydration/service.js'
+import { $output } from '../src/lexicons/org/hypercerts/feed/getFeed.js'
 import { Metrics } from '../src/metrics.js'
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL
@@ -881,6 +883,64 @@ describe('Hypercerts feed definition against Postgres', () => {
       malformedJson,
       createdAtWithNullIndex,
     ])
+  })
+
+  it('excludes rows whose UTC instant is outside years 0001-9999 instead of re-dating them or failing the page', async () => {
+    const viewer = randomDid()
+    const author = randomDid()
+    await seedDidOnlyProfile(viewer)
+    await seedFollow(viewer, author)
+    const seedActivity = (key: string, createdAt: string): Promise<string> =>
+      seedRecord(
+        author,
+        'org.hypercerts.claim.activity',
+        key,
+        {
+          $type: 'org.hypercerts.claim.activity',
+          title: 'Activity',
+          shortDescription: 'Activity',
+          createdAt,
+        },
+        '2026-07-21T09:00:00Z',
+      )
+    const newest = await seedActivity(
+      'max-instant',
+      '9999-12-31T23:59:59.999999Z',
+    )
+    const middle = await seedActivity('normal', '2026-07-21T10:00:00Z')
+    const oldest = await seedActivity('min-instant', '0001-01-01T00:00:00Z')
+    // A valid atproto datetime whose UTC instant is year 10000, and one before year 1.
+    // Each has an in-range indexed_at, which must not stand in for it.
+    await seedActivity('year-10000', '9999-12-31T23:59:59-12:00')
+    await seedActivity('before-year-1', '0001-01-01T00:00:00+05:00')
+
+    const hydrated = new HydratedFeedService(pages, identities)
+    const items: { readonly uri: string; readonly sortAt: string }[] = []
+    let cursor: string | undefined
+    for (let pageCount = 0; pageCount < 5; pageCount++) {
+      const output = await hydrated.getFeed(
+        feedRequest(viewer, {
+          limit: 1,
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      )
+      // The procedure output-validates each page, so a sortAt or cursor the Lexicon rejects fails the request.
+      $output.schema.$parse(output)
+      items.push(...output.feed.map(({ uri, sortAt }) => ({ uri, sortAt })))
+      cursor = output.cursor
+      if (cursor === undefined) break
+    }
+
+    expect(items).toEqual([
+      { uri: newest, sortAt: '9999-12-31T23:59:59.999999Z' },
+      { uri: middle, sortAt: '2026-07-21T10:00:00.000000Z' },
+      { uri: oldest, sortAt: '0001-01-01T00:00:00.000000Z' },
+    ])
+    expect(
+      (await service.getFeedSkeleton(feedRequest(viewer))).feed.map(
+        (item) => item.uri,
+      ),
+    ).toEqual([newest, middle, oldest])
   })
 
   it('pairs projects by effective timestamps, including indexed_at fallback', async () => {
