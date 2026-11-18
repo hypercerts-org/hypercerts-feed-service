@@ -14,13 +14,13 @@ It does not ingest or write records, call PDS or AppView APIs, or keep history. 
 
 ## Endpoints
 
-| Route                                            | Purpose                                                                                                                                                                       |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /xrpc/org.hypercerts.feed.getFeedSkeleton` | Ordered page of source record AT-URIs, for clients that hydrate records themselves                                                                                            |
-| `POST /xrpc/org.hypercerts.feed.getFeed`         | The same page with a feed-specific view per item. Invalid records are dropped, so a page can be short or empty and still have a cursor; keep paging while a cursor is present |
-| `GET /`                                          | Short JSON description of the service                                                                                                                                         |
-| `GET /.well-known/did.json`                      | DID document when `SERVICE_DID` is a `did:web`                                                                                                                                |
-| `GET /health`, `GET /ready`                      | Liveness and database readiness (keep private)                                                                                                                                |
+| Route                                            | Purpose                                                                                                                                                                                                                                                   |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /xrpc/org.hypercerts.feed.getFeedSkeleton` | Ordered page of `{ uri }` items, the AT-URI of each item's own record, for clients that hydrate records themselves                                                                                                                                        |
+| `POST /xrpc/org.hypercerts.feed.getFeed`         | The same page as flat items (`uri`, `cid`, `author`, `kind`, `sortAt`, and where they apply `subject`, counts and `content`). Invalid records are dropped, so a page can be short or empty and still have a cursor; keep paging while a cursor is present |
+| `GET /`                                          | Short JSON description of the service                                                                                                                                                                                                                     |
+| `GET /.well-known/did.json`                      | DID document when `SERVICE_DID` is a `did:web`                                                                                                                                                                                                            |
+| `GET /health`, `GET /ready`                      | Liveness and database readiness (keep private)                                                                                                                                                                                                            |
 
 Both feed procedures take the same JSON body:
 
@@ -30,13 +30,15 @@ Both feed procedures take the same JSON body:
 
 Callers can be anonymous (they must then send `params.viewerDid`) or use AT Protocol service auth, where the verified token issuer is the viewer. Send a returned `cursor` back at the top level to get the next page.
 
+Both feeds return the same flat item shape. Only `uri`, `author`, `kind` and `sortAt` are required; clients must ignore fields and `$type` values they do not know. `sortAt` is the time the feed is ordered by (and the cursor encodes); `createdAt` is the record's own value; `subject` is what the record points at, a `recordView` or an `actorView`. The full field list and the kind table are in [docs/api.md](docs/api.md#item-shape-both-feeds).
+
 ## Feeds
 
 ### Hypercerts feed
 
 `feedId`: `org.hypercerts.feed.defs#hypercertsFeed`
 
-Activity from accounts the viewer follows, optionally widened by trusted evaluators' endorsements and filtered by organization quality labels. Kinds: `cert.create`, `collection.create`, `project.created_with_cert`, `evaluation.create`, `measurement.create`, `update.create`, `endorsement.award`.
+Activity from accounts the viewer follows, optionally widened by trusted evaluators' endorsements and filtered by organization quality labels. Kinds: `cert`, `collection`, `project-with-cert`, `evaluation`, `measurement`, `endorsement`, `update`.
 
 ```bash
 curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
@@ -55,28 +57,27 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
 {
   "feed": [
     {
-      "subject": "at://did:plc:nfd56jdcukm76ogr43ckjvr7/app.certified.badge.award/3mywt7grsgy2h",
-      "view": {
-        "$type": "org.hypercerts.feed.defs#hypercertsFeedView",
-        "kind": "endorsement.award",
-        "actor": {
-          "did": "did:plc:nfd56jdcukm76ogr43ckjvr7",
-          "displayName": "holke.xyz",
-          "avatar": {
-            "$type": "org.hypercerts.defs#smallImage",
-            "image": {
-              "$type": "blob",
-              "ref": { "$link": "bafkreiapzh7gatkrwfgrop7qweb7zllbqmqsjxcn7qyishwfkp4ept4kiy" },
-              "mimeType": "image/jpeg",
-              "size": 1154171
-            }
+      "uri": "at://did:plc:nfd56jdcukm76ogr43ckjvr7/app.certified.badge.award/3mywt7grsgy2h",
+      "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
+      "author": {
+        "did": "did:plc:nfd56jdcukm76ogr43ckjvr7",
+        "displayName": "holke.xyz",
+        "avatar": {
+          "$type": "org.hypercerts.defs#smallImage",
+          "image": {
+            "$type": "blob",
+            "ref": { "$link": "bafkreiapzh7gatkrwfgrop7qweb7zllbqmqsjxcn7qyishwfkp4ept4kiy" },
+            "mimeType": "image/jpeg",
+            "size": 1154171
           }
-        },
-        "content": {
-          "$type": "org.hypercerts.feed.defs#endorsementView",
-          "subject": { "did": "did:plc:2zaqs2fpnxmzvjepb2kksahq" },
-          "createdAt": "2026-10-28T13:10:50.018Z"
         }
+      },
+      "kind": "endorsement",
+      "sortAt": "2026-10-28T13:10:50.018000Z",
+      "createdAt": "2026-10-28T13:10:50.018Z",
+      "subject": {
+        "$type": "org.hypercerts.feed.defs#actorView",
+        "did": "did:plc:2zaqs2fpnxmzvjepb2kksahq"
       }
     }
   ],
@@ -88,7 +89,7 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
 
 `feedId`: `org.hypercerts.feed.defs#maearthFeed`
 
-Off by default; set `MAEARTH_FEED_ENABLED=true` to turn it on (it is on for all three hosted instances). When off, requests for it return `UnsupportedFeed`. Kinds: `post`, `projectFollow`, `accountFollow`, `repost`. Optional params: `kinds` and `actorDid` (narrows the viewer's Following scope to one author).
+Off by default; set `MAEARTH_FEED_ENABLED=true` to turn it on (it is on for all three hosted instances). When off, requests for it return `UnsupportedFeed`. Kinds: `update`, `repost`, `project-follow`, `account-follow`. Optional params: `kinds` and `actorDid` (narrows the viewer's Following scope to one author).
 
 ```bash
 curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
@@ -104,22 +105,22 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
   }'
 ```
 
-`getFeed` returns metadata and engagement counts only (no hydrated content), which MaEarth uses to merge the feed with its own data:
+`getFeed` returns metadata and engagement counts only (no `content`, and `author` is a DID alone), which MaEarth uses to merge the feed with its own data:
 
 ```json
 {
   "feed": [
     {
-      "subject": "at://did:plc:bqkfguw3v76x5arrun2vybp2/app.certified.feed.repost/3mzwurdidkk25",
-      "view": {
-        "$type": "org.hypercerts.feed.defs#maearthFeedView",
-        "kind": "repost",
-        "createdAt": "2026-11-10T07:03:34.692Z",
-        "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
-        "actor": { "did": "did:plc:bqkfguw3v76x5arrun2vybp2" },
-        "target": {
-          "uri": "at://did:plc:uuvfp7xadcud56pjxbka26lc/org.hypercerts.context.attachment/3mxbyjkmrkk2u"
-        },
+      "uri": "at://did:plc:bqkfguw3v76x5arrun2vybp2/app.certified.feed.repost/3mzwurdidkk25",
+      "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
+      "author": { "did": "did:plc:bqkfguw3v76x5arrun2vybp2" },
+      "kind": "repost",
+      "sortAt": "2026-11-10T07:03:34.692000Z",
+      "createdAt": "2026-11-10T07:03:34.692Z",
+      "subject": {
+        "$type": "org.hypercerts.feed.defs#recordView",
+        "uri": "at://did:plc:uuvfp7xadcud56pjxbka26lc/org.hypercerts.context.attachment/3mxbyjkmrkk2u",
+        "cid": "bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm",
         "likeCount": 4,
         "repostCount": 2,
         "replyCount": 0
@@ -130,7 +131,7 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
 }
 ```
 
-Every item has `actor: { did }`, the record's author, and an optional `cid`. `createdAt` is the record's own value, unchanged, and is omitted when the record's value is unusable; it is not the sort time. A repost and a project follow carry `target: { uri }`, an account follow `target: { did }`, and a post no `target`. `actor` and `target` are open objects: ignore fields you do not know. Post and repost items carry `likeCount`, `repostCount` and `replyCount` (a repost shows its original post's counts; follows have none).
+`author` is the record's author. `createdAt` is the record's own value, unchanged, and is omitted when it is unusable; `sortAt` is the time the feed ordered by. A repost and a project follow carry a `recordView` `subject`, an account follow an `actorView`, and an `update` none. Counts always describe the URI beside them: an `update` carries its own `likeCount`, `repostCount` and `replyCount`, while a repost's numbers (its original post's) sit on its `subject`; follows have none.
 
 Full request rules, selection, errors, and pagination: [docs/api.md](docs/api.md).
 
