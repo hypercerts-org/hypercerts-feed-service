@@ -168,28 +168,28 @@ const contentByKind = {
   },
 } as const
 
-// What each Hypercerts kind points at: evaluations a record, endorsements an account.
-const subjectByKind = {
-  evaluation: recordSubject,
-  endorsement: actorSubject,
-} as const
-
 const hypercertsItem = (
   kind: (typeof supportedFeedKinds)[number],
-): JsonObject => ({
-  uri,
-  cid,
-  author: actor,
-  kind,
-  sortAt: createdAt,
-  createdAt,
-  ...(kind in subjectByKind
-    ? { subject: subjectByKind[kind as keyof typeof subjectByKind] }
-    : {}),
-  ...(kind in contentByKind
-    ? { content: contentByKind[kind as keyof typeof contentByKind] }
-    : {}),
-})
+): JsonObject => {
+  // Evaluations point at a record and endorsements at an account; an endorsement has no content.
+  const subject =
+    kind === 'evaluation'
+      ? recordSubject
+      : kind === 'endorsement'
+        ? actorSubject
+        : undefined
+  const content = kind === 'endorsement' ? undefined : contentByKind[kind]
+  return {
+    uri,
+    cid,
+    author: actor,
+    kind,
+    sortAt: createdAt,
+    createdAt,
+    ...(subject === undefined ? {} : { subject }),
+    ...(content === undefined ? {} : { content }),
+  }
+}
 
 const withContent = (item: JsonObject, content: JsonObject): JsonObject => ({
   ...item,
@@ -437,10 +437,10 @@ describe('feed Lexicon contract', () => {
     })
 
     const activityWithoutCount: Record<string, unknown> = {
-      ...contentByKind['cert'],
+      ...contentByKind.cert,
     }
     const collectionWithoutCount: Record<string, unknown> = {
-      ...contentByKind['collection'],
+      ...contentByKind.collection,
     }
     delete activityWithoutCount.locationCount
     delete collectionWithoutCount.itemCount
@@ -528,7 +528,7 @@ describe('feed Lexicon contract', () => {
             somethingNew: 1,
           },
           withContent(hypercertsItem('cert'), {
-            ...contentByKind['cert'],
+            ...contentByKind.cert,
             image: unknownImage,
           }),
           withContent(hypercertsItem('cert'), {
@@ -628,7 +628,7 @@ describe('feed Lexicon contract', () => {
     [
       'a malformed measured record',
       withContent(hypercertsItem('measurement'), {
-        ...contentByKind['measurement'],
+        ...contentByKind.measurement,
         subjects: [{ uri: 'not-an-at-uri', cid: 'not-a-cid' }],
       }),
     ],
