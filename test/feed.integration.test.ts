@@ -999,6 +999,38 @@ describe('Hypercerts feed definition against Postgres', () => {
     ])
   })
 
+  it('does not suppress an in-range activity when its paired collection is outside the year bound', async () => {
+    const viewer = randomDid()
+    const author = randomDid()
+    await seedDidOnlyProfile(viewer)
+
+    const activity = await seedRecord(
+      author,
+      'org.hypercerts.claim.activity',
+      'activity-of-out-of-range-collection',
+      { createdAt: '9999-12-31T23:59:50Z' },
+      '2026-07-21T09:00:00Z',
+    )
+    // Year 10000 in UTC and 20 seconds after the activity, so the pair forms but the collection is excluded.
+    await seedRecord(
+      author,
+      'org.hypercerts.collection',
+      'out-of-range-collection',
+      {
+        createdAt: '9999-12-31T23:00:10-01:00',
+        items: [{ itemIdentifier: { uri: activity, cid } }],
+      },
+      '2026-07-21T09:00:00Z',
+    )
+    await seedFollow(viewer, author)
+
+    const request = feedRequest(viewer, { limit: 50 })
+    const metadata = await pages.loadPage(request, 'metadata')
+    expect(metadata.rows.map((row) => [row.uri, row.kind])).toEqual([
+      [activity, 'cert'],
+    ])
+  })
+
   it('uses the latest subject response when deciding whether an endorsement is active', async () => {
     const viewer = randomDid()
     const evaluator = randomDid()

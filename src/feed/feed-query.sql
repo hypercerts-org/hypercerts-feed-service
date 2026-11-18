@@ -335,6 +335,11 @@ project_pairs AS (
     AND activity_json.value IS NOT NULL
     AND collection_time.effective_at IS NOT NULL
     AND activity_time.effective_at IS NOT NULL
+    -- A pair suppresses its activity only when the collection is itself eligible. One
+    -- outside the year bound never reaches the feed, and its in-range activity must not
+    -- vanish with it. (An out-of-range activity is excluded by the same bound.)
+    AND collection_time.effective_at >= timestamp_pattern.earliest_effective_at
+    AND collection_time.effective_at < timestamp_pattern.effective_at_end
     AND ABS(EXTRACT(EPOCH FROM (
       activity_time.effective_at - collection_time.effective_at
     ))) < 60
