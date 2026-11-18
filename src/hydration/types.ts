@@ -1,5 +1,6 @@
 import type { BlobRef } from '@atproto/lex'
 
+import type { MaearthKind } from '../feed/maearth-types.js'
 import type { FeedKind } from '../feed/types.js'
 
 /** Current HappyView Certified-profile data for one requested DID. */
@@ -41,12 +42,40 @@ export type ActorImageReference = UriImageReference | SmallImageReference
 export type CollectionImageReference = ActorImageReference | LargeImageReference
 export type UpdateImageReference = UriImageReference | SmallBlobImageReference
 
-/** Stable actor identity projected into hydrated feed items. */
-export interface ActorSummary {
+/**
+ * An account: the item's `author`, or an item `subject` that points at an
+ * account. Certified-profile fields are set only by the Hypercerts feed.
+ */
+export interface ActorView {
   readonly did: string
   readonly displayName?: string
   readonly avatar?: ActorImageReference
 }
+
+/**
+ * A reference to a record. `cid` is optional because a project follow's subject
+ * carries none. Counts, when set, count `uri`.
+ */
+export interface RecordView {
+  readonly uri: string
+  readonly cid?: string
+  readonly likeCount?: number
+  readonly repostCount?: number
+  readonly replyCount?: number
+}
+
+/** An item subject that references a record. */
+export interface RecordSubject extends RecordView {
+  readonly $type: 'org.hypercerts.feed.defs#recordView'
+}
+
+/** An item subject that references an account. */
+export interface ActorSubject extends ActorView {
+  readonly $type: 'org.hypercerts.feed.defs#actorView'
+}
+
+/** What an item's own record points at; mirrors that record's single `subject`. */
+export type ItemSubject = RecordSubject | ActorSubject
 
 /** First-render fields for an activity feed card. */
 export interface ActivityFeedView {
@@ -54,7 +83,6 @@ export interface ActivityFeedView {
   readonly title: string
   readonly shortDescription?: string
   readonly image?: ActorImageReference
-  readonly createdAt?: string
   readonly startDate?: string
   readonly endDate?: string
   readonly locationCount: number
@@ -67,37 +95,20 @@ export interface CollectionFeedView {
   readonly title: string
   readonly shortDescription?: string
   readonly image?: CollectionImageReference
-  readonly createdAt?: string
   readonly itemCount: number
-}
-
-/** First-render fields for an account endorsement card. */
-export interface EndorsementFeedView {
-  readonly $type: 'org.hypercerts.feed.defs#endorsementView'
-  readonly subject: ActorSummary
-  readonly createdAt?: string
-}
-
-/** Exact record reference used by hydrated content that targets another record. */
-export interface FeedTargetReference {
-  readonly uri: string
-  readonly cid: string
 }
 
 /** Lean first-render fields for an evaluation card. */
 export interface EvaluationFeedView {
   readonly $type: 'org.hypercerts.feed.defs#evaluationView'
   readonly summary?: string
-  readonly createdAt?: string
-  readonly target?: FeedTargetReference
 }
 
 /** Lean first-render fields for a measurement card. */
 export interface MeasurementFeedView {
   readonly $type: 'org.hypercerts.feed.defs#measurementView'
   readonly metric?: string
-  readonly createdAt?: string
-  readonly target?: FeedTargetReference
+  readonly subjects?: readonly RecordView[]
 }
 
 /** First-render fields for an attachment/update card. */
@@ -106,35 +117,47 @@ export interface UpdateFeedView {
   readonly title?: string
   readonly shortDescription?: string
   readonly image?: UpdateImageReference
-  readonly createdAt?: string
-  readonly target?: FeedTargetReference
+  readonly subjects?: readonly RecordView[]
 }
 
 /** Stable kind-specific card data built from one validated source record. */
-export type FeedItemView =
+export type ItemContent =
   | ActivityFeedView
   | CollectionFeedView
-  | EndorsementFeedView
   | EvaluationFeedView
   | MeasurementFeedView
   | UpdateFeedView
 
-/** Hypercerts feed-specific representation attached to one generic feed item. */
-export interface HypercertsFeedView {
-  readonly $type: 'org.hypercerts.feed.defs#hypercertsFeedView'
-  readonly kind: FeedKind
-  readonly actor: ActorSummary
-  readonly content: FeedItemView
+/** Every kind either feed can return. */
+export type ItemKind = FeedKind | MaearthKind
+
+/**
+ * One feed item, flat: the item's own record, its author, kind and sort time,
+ * and optionally what it points at, its counts and its card content.
+ */
+export interface ItemView {
+  /** AT-URI of the item's own record. */
+  readonly uri: string
+  /** CID of the item's own record. Optional on the wire; this service always sets it. */
+  readonly cid: string
+  /** The account that wrote the item's own record (the authority of `uri`). */
+  readonly author: ActorView
+  readonly kind: ItemKind
+  /** The value the feed is ordered by and the cursor encodes. */
+  readonly sortAt: string
+  /** The record's own `createdAt`, unchanged; absent when unusable. */
+  readonly createdAt?: string
+  readonly subject?: ItemSubject
+  /** Counts of `uri`; MaEarth update items only. */
+  readonly likeCount?: number
+  readonly repostCount?: number
+  readonly replyCount?: number
+  /** Hypercerts card fields; never set by the MaEarth feed. */
+  readonly content?: ItemContent
 }
 
-/** Generic hydrated item built from one validated source record. */
-export interface HydratedFeedItem<View = HypercertsFeedView> {
-  readonly subject: string
-  readonly view: View
-}
-
-/** Public response body projected by the hydrated feed service. */
-export interface GetHydratedFeedOutput<View = HypercertsFeedView> {
-  readonly feed: readonly HydratedFeedItem<View>[]
+/** Public response body projected by a hydrated feed service. */
+export interface GetHydratedFeedOutput {
+  readonly feed: readonly ItemView[]
   readonly cursor?: string
 }

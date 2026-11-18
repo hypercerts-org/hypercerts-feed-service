@@ -1,13 +1,11 @@
 import type { FeedPageLoader, InternalSourceFeedRow } from '../feed/registry.js'
 import { FEED_KINDS, type GetFeedSkeletonInput } from '../feed/types.js'
-import type { MaearthFeedView } from '../feed/maearth-types.js'
 import type {
-  HypercertsFeedView,
   ActorContext,
-  ActorSummary,
+  ActorView,
   GetHydratedFeedOutput,
-  HydratedFeedItem,
   IdentityReader,
+  ItemView,
 } from './types.js'
 import {
   getEndorsedActorDid,
@@ -15,7 +13,7 @@ import {
   validateFeedRecord,
   type ValidatedFeedRecord,
 } from './validation.js'
-import { buildActorSummary, buildFeedItemView } from './views.js'
+import { buildActorView, buildItemContent, buildItemSubject } from './views.js'
 
 const identityInvariantError = (): Error =>
   new Error(
@@ -27,19 +25,16 @@ const unsupportedKindError = (kind: string): Error =>
     `Hydrated Hypercerts feed invariant failed: a selected row has kind ${JSON.stringify(kind)}, which this hydrator does not serve; route every registered feedId to the hydrator that owns its row kinds before serving requests.`,
   )
 
-const requireActorSummary = (
+const requireActorView = (
   did: string,
   contexts: ReadonlyMap<string, ActorContext>,
-): ActorSummary => {
+): ActorView => {
   const context = contexts.get(did)
   if (context?.did !== did) {
     throw identityInvariantError()
   }
 
-  return buildActorSummary(
-    did,
-    validateCertifiedProfile(context.certifiedProfile),
-  )
+  return buildActorView(did, validateCertifiedProfile(context.certifiedProfile))
 }
 
 interface ValidatedFeedRow {
@@ -74,33 +69,36 @@ const collectValidatedFeedRows = (
   return { rows: validatedRows, requestedDids }
 }
 
-const buildHydratedFeedItems = (
+const buildItems = (
   validatedRows: readonly ValidatedFeedRow[],
-  summaries: ReadonlyMap<string, ActorSummary>,
-): HydratedFeedItem[] =>
+  views: ReadonlyMap<string, ActorView>,
+): ItemView[] =>
   validatedRows.map(({ row, record, endorsedDid }) => {
-    const actor = summaries.get(row.actorDid)
-    if (actor?.did !== row.actorDid) {
+    const author = views.get(row.actorDid)
+    if (author?.did !== row.actorDid) {
       throw identityInvariantError()
     }
     const endorsedActor =
-      endorsedDid === undefined ? undefined : summaries.get(endorsedDid)
+      endorsedDid === undefined ? undefined : views.get(endorsedDid)
+    const subject = buildItemSubject(record, {
+      ...(endorsedActor === undefined ? {} : { endorsedActor }),
+    })
+    const content = buildItemContent(record)
 
     return {
-      subject: row.uri,
-      view: {
-        $type: 'org.hypercerts.feed.defs#hypercertsFeedView',
-        kind: record.kind,
-        actor,
-        content: buildFeedItemView(record, {
-          ...(endorsedActor === undefined ? {} : { endorsedActor }),
-        }),
-      },
+      uri: row.uri,
+      cid: row.cid,
+      author,
+      kind: record.kind,
+      sortAt: row.sortValue,
+      createdAt: record.value.createdAt,
+      ...(subject === undefined ? {} : { subject }),
+      ...(content === undefined ? {} : { content }),
     }
   })
 
 const buildOutput = (
-  feed: readonly HydratedFeedItem[],
+  feed: readonly ItemView[],
   cursor: string | undefined,
 ): GetHydratedFeedOutput => ({
   feed,
@@ -109,9 +107,7 @@ const buildOutput = (
 
 /** Application seam consumed by the hydrated XRPC transport. */
 export interface HydratedFeedReader {
-  getFeed(
-    input: GetFeedSkeletonInput,
-  ): Promise<GetHydratedFeedOutput<HypercertsFeedView | MaearthFeedView>>
+  getFeed(input: GetFeedSkeletonInput): Promise<GetHydratedFeedOutput>
 }
 
 /** Coordinates one same-statement source page and one bounded identity batch. */
@@ -121,7 +117,7 @@ export class HydratedFeedService implements HydratedFeedReader {
     private readonly identities: IdentityReader,
   ) {}
 
-  /** Builds one ordered, view-only hydrated feed page. */
+  /** Builds one ordered, flat hydrated feed page. */
   async getFeed(input: GetFeedSkeletonInput): Promise<GetHydratedFeedOutput> {
     const page = await this.pages.loadPage(input, 'with-source')
     const batch = collectValidatedFeedRows(page.rows)
@@ -130,23 +126,20 @@ export class HydratedFeedService implements HydratedFeedReader {
       return buildOutput([], page.cursor)
     }
 
-    const summaries = await this.loadActorSummaries(batch.requestedDids)
-    return buildOutput(
-      buildHydratedFeedItems(batch.rows, summaries),
-      page.cursor,
-    )
+    const views = await this.loadActorViews(batch.requestedDids)
+    return buildOutput(buildItems(batch.rows, views), page.cursor)
   }
 
-  private async loadActorSummaries(
+  private async loadActorViews(
     requestedDids: ReadonlySet<string>,
-  ): Promise<ReadonlyMap<string, ActorSummary>> {
+  ): Promise<ReadonlyMap<string, ActorView>> {
     const contexts = await this.identities.getByDids([...requestedDids])
-    const summaries = new Map<string, ActorSummary>()
+    const views = new Map<string, ActorView>()
 
     for (const did of requestedDids) {
-      summaries.set(did, requireActorSummary(did, contexts))
+      views.set(did, requireActorView(did, contexts))
     }
 
-    return summaries
+    return views
   }
 }

@@ -116,37 +116,37 @@ export const isMeaningfulCertifiedProfile = (
 
 export type ValidatedFeedRecord =
   | {
-      readonly kind: 'cert.create'
+      readonly kind: 'cert'
       readonly collection: 'org.hypercerts.claim.activity'
       readonly rawValue: unknown
       readonly value: OrgHypercertsClaimActivity.Record
     }
   | {
-      readonly kind: 'collection.create' | 'project.created_with_cert'
+      readonly kind: 'collection' | 'project-with-cert'
       readonly collection: 'org.hypercerts.collection'
       readonly rawValue: unknown
       readonly value: OrgHypercertsCollection.Record
     }
   | {
-      readonly kind: 'evaluation.create'
+      readonly kind: 'evaluation'
       readonly collection: 'org.hypercerts.context.evaluation'
       readonly rawValue: unknown
       readonly value: OrgHypercertsContextEvaluation.Record
     }
   | {
-      readonly kind: 'measurement.create'
+      readonly kind: 'measurement'
       readonly collection: 'org.hypercerts.context.measurement'
       readonly rawValue: unknown
       readonly value: OrgHypercertsContextMeasurement.Record
     }
   | {
-      readonly kind: 'update.create'
+      readonly kind: 'update'
       readonly collection: 'org.hypercerts.context.attachment'
       readonly rawValue: unknown
       readonly value: OrgHypercertsContextAttachment.Record
     }
   | {
-      readonly kind: 'endorsement.award'
+      readonly kind: 'endorsement'
       readonly collection: 'app.certified.badge.award'
       readonly rawValue: unknown
       readonly value: AppCertifiedBadgeAward.Record
@@ -169,7 +169,7 @@ const validateActivityRecord = (
   rawValue: unknown,
   parsedValue: unknown,
 ): ValidatedFeedRecordFor<'org.hypercerts.claim.activity'> | undefined => {
-  if (kind !== 'cert.create') return undefined
+  if (kind !== 'cert') return undefined
 
   const result = OrgHypercertsClaimActivity.validateRecord(parsedValue)
   if (
@@ -195,7 +195,7 @@ const validateCollectionRecord = (
   rawValue: unknown,
   parsedValue: unknown,
 ): ValidatedFeedRecordFor<'org.hypercerts.collection'> | undefined => {
-  if (kind !== 'collection.create' && kind !== 'project.created_with_cert') {
+  if (kind !== 'collection' && kind !== 'project-with-cert') {
     return undefined
   }
 
@@ -228,7 +228,7 @@ const validateEvaluationRecord = (
   rawValue: unknown,
   parsedValue: unknown,
 ): ValidatedFeedRecordFor<'org.hypercerts.context.evaluation'> | undefined => {
-  if (kind !== 'evaluation.create') return undefined
+  if (kind !== 'evaluation') return undefined
 
   const result = OrgHypercertsContextEvaluation.validateRecord(parsedValue)
   if (
@@ -251,7 +251,7 @@ const validateMeasurementRecord = (
   rawValue: unknown,
   parsedValue: unknown,
 ): ValidatedFeedRecordFor<'org.hypercerts.context.measurement'> | undefined => {
-  if (kind !== 'measurement.create') return undefined
+  if (kind !== 'measurement') return undefined
 
   const result = OrgHypercertsContextMeasurement.validateRecord(parsedValue)
   if (!result.success) return undefined
@@ -268,7 +268,7 @@ const validateUpdateRecord = (
   rawValue: unknown,
   parsedValue: unknown,
 ): ValidatedFeedRecordFor<'org.hypercerts.context.attachment'> | undefined => {
-  if (kind !== 'update.create') return undefined
+  if (kind !== 'update') return undefined
 
   const result = OrgHypercertsContextAttachment.validateRecord(parsedValue)
   if (
@@ -291,7 +291,7 @@ const validateEndorsementRecord = (
   rawValue: unknown,
   parsedValue: unknown,
 ): ValidatedFeedRecordFor<'app.certified.badge.award'> | undefined => {
-  if (kind !== 'endorsement.award') return undefined
+  if (kind !== 'endorsement') return undefined
 
   const result = AppCertifiedBadgeAward.validateRecord(parsedValue)
   if (!result.success || !hasAccountSubject(result.value)) return undefined
@@ -338,7 +338,7 @@ export const validateFeedRecord = (
 export const getEndorsedActorDid = (
   record: ValidatedFeedRecord,
 ): string | undefined => {
-  if (record.kind !== 'endorsement.award') return undefined
+  if (record.kind !== 'endorsement') return undefined
   return isObject(record.value.subject) &&
     record.value.subject.$type === 'app.certified.defs#did' &&
     typeof record.value.subject.did === 'string'

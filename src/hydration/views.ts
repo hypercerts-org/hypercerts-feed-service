@@ -1,15 +1,15 @@
 import type {
   ActivityFeedView,
   ActorImageReference,
-  ActorSummary,
+  ActorView,
   CollectionFeedView,
   CollectionImageReference,
-  EndorsementFeedView,
   EvaluationFeedView,
-  FeedItemView,
-  FeedTargetReference,
+  ItemContent,
+  ItemSubject,
   LargeImageReference,
   MeasurementFeedView,
+  RecordView,
   SmallBlobImageReference,
   UpdateFeedView,
   UriImageReference,
@@ -73,10 +73,10 @@ const smallBlobImageReference = (
 }
 
 /** Uses a meaningful Certified profile, otherwise returns a DID-only identity. */
-export const buildActorSummary = (
+export const buildActorView = (
   did: string,
   certifiedProfile: ValidatedCertifiedProfile | undefined,
-): ActorSummary => {
+): ActorView => {
   if (certifiedProfile && isMeaningfulCertifiedProfile(certifiedProfile)) {
     const avatar = smallImageReference(certifiedProfile.avatar)
     return {
@@ -92,26 +92,21 @@ export const buildActorSummary = (
 }
 
 export interface FeedViewContext {
-  readonly endorsedActor?: ActorSummary
+  readonly endorsedActor?: ActorView
 }
 
-const targetReference = (
-  target: { readonly uri: string; readonly cid: string } | undefined,
-): FeedTargetReference | undefined =>
-  target === undefined ? undefined : { uri: target.uri, cid: target.cid }
+const recordReference = (target: {
+  readonly uri: string
+  readonly cid: string
+}): RecordView => ({ uri: target.uri, cid: target.cid })
 
-const endorsementViewInvariantError = (): Error =>
+const endorsementSubjectInvariantError = (): Error =>
   new Error(
-    'Endorsement view failed because the endorsed account could not be matched to its discovered identity; verify endorsement DID discovery and identity mapping before serving hydrated pages.',
+    'Endorsement subject failed because the endorsed account could not be matched to its discovered identity; verify endorsement DID discovery and identity mapping before serving hydrated pages.',
   )
 
 type FeedRecordValue<Collection extends ValidatedFeedRecord['collection']> =
   Extract<ValidatedFeedRecord, { readonly collection: Collection }>['value']
-
-type EndorsementRecord = Extract<
-  ValidatedFeedRecord,
-  { readonly collection: 'app.certified.badge.award' }
->
 
 const buildActivityView = (
   value: FeedRecordValue<'org.hypercerts.claim.activity'>,
@@ -122,7 +117,6 @@ const buildActivityView = (
     title: value.title,
     shortDescription: value.shortDescription,
     ...(image === undefined ? {} : { image }),
-    createdAt: value.createdAt,
     ...(value.startDate === undefined ? {} : { startDate: value.startDate }),
     ...(value.endDate === undefined ? {} : { endDate: value.endDate }),
     locationCount: value.locations?.length ?? 0,
@@ -142,49 +136,26 @@ const buildCollectionView = (
       ? {}
       : { shortDescription: value.shortDescription }),
     ...(image === undefined ? {} : { image }),
-    createdAt: value.createdAt,
     itemCount: value.items?.length ?? 0,
-  }
-}
-
-const buildEndorsementView = (
-  record: EndorsementRecord,
-  context: FeedViewContext,
-): EndorsementFeedView => {
-  const subjectDid = getEndorsedActorDid(record)
-  if (subjectDid === undefined || context.endorsedActor?.did !== subjectDid) {
-    throw endorsementViewInvariantError()
-  }
-  return {
-    $type: 'org.hypercerts.feed.defs#endorsementView',
-    subject: context.endorsedActor,
-    createdAt: record.value.createdAt,
   }
 }
 
 const buildEvaluationView = (
   value: FeedRecordValue<'org.hypercerts.context.evaluation'>,
-): EvaluationFeedView => {
-  const target = targetReference(value.subject)
-  return {
-    $type: 'org.hypercerts.feed.defs#evaluationView',
-    summary: value.summary,
-    createdAt: value.createdAt,
-    ...(target === undefined ? {} : { target }),
-  }
-}
+): EvaluationFeedView => ({
+  $type: 'org.hypercerts.feed.defs#evaluationView',
+  summary: value.summary,
+})
 
 const buildMeasurementView = (
   value: FeedRecordValue<'org.hypercerts.context.measurement'>,
-): MeasurementFeedView => {
-  const target = targetReference(value.subjects?.[0])
-  return {
-    $type: 'org.hypercerts.feed.defs#measurementView',
-    metric: value.metric,
-    createdAt: value.createdAt,
-    ...(target === undefined ? {} : { target }),
-  }
-}
+): MeasurementFeedView => ({
+  $type: 'org.hypercerts.feed.defs#measurementView',
+  metric: value.metric,
+  ...(value.subjects === undefined
+    ? {}
+    : { subjects: value.subjects.map(recordReference) }),
+})
 
 const buildUpdateView = (
   value: FeedRecordValue<'org.hypercerts.context.attachment'>,
@@ -198,7 +169,6 @@ const buildUpdateView = (
       entry.blob.mimeType.startsWith('image/'),
   )
   const image = smallBlobImageReference(imageBlob)
-  const target = targetReference(value.subjects?.[0])
   return {
     $type: 'org.hypercerts.feed.defs#updateView',
     title: value.title,
@@ -206,29 +176,68 @@ const buildUpdateView = (
       ? {}
       : { shortDescription: value.shortDescription }),
     ...(image === undefined ? {} : { image }),
-    createdAt: value.createdAt,
-    ...(target === undefined ? {} : { target }),
+    ...(value.subjects === undefined
+      ? {}
+      : { subjects: value.subjects.map(recordReference) }),
   }
 }
 
-/** Builds one stable feed-card view without performing hydration or other I/O. */
-export const buildFeedItemView = (
+/**
+ * Builds the Hypercerts card fields for one record without performing hydration
+ * or other I/O. An endorsement has none: its account is the item's subject.
+ */
+export const buildItemContent = (
+  record: ValidatedFeedRecord,
+): ItemContent | undefined => {
+  switch (record.kind) {
+    case 'cert':
+      return buildActivityView(record.value)
+    case 'collection':
+    case 'project-with-cert':
+      return buildCollectionView(record.value)
+    case 'endorsement':
+      return undefined
+    case 'evaluation':
+      return buildEvaluationView(record.value)
+    case 'measurement':
+      return buildMeasurementView(record.value)
+    case 'update':
+      return buildUpdateView(record.value)
+  }
+}
+
+/**
+ * Builds what the record's own single `subject` points at: the evaluated record
+ * for an evaluation, the hydrated endorsed account for an endorsement. Other
+ * kinds have no single subject field (measurements and updates list theirs in
+ * content).
+ */
+export const buildItemSubject = (
   record: ValidatedFeedRecord,
   context: FeedViewContext = {},
-): FeedItemView => {
+): ItemSubject | undefined => {
   switch (record.kind) {
-    case 'cert.create':
-      return buildActivityView(record.value)
-    case 'collection.create':
-    case 'project.created_with_cert':
-      return buildCollectionView(record.value)
-    case 'endorsement.award':
-      return buildEndorsementView(record, context)
-    case 'evaluation.create':
-      return buildEvaluationView(record.value)
-    case 'measurement.create':
-      return buildMeasurementView(record.value)
-    case 'update.create':
-      return buildUpdateView(record.value)
+    case 'evaluation':
+      return record.value.subject === undefined
+        ? undefined
+        : {
+            $type: 'org.hypercerts.feed.defs#recordView',
+            ...recordReference(record.value.subject),
+          }
+    case 'endorsement': {
+      const subjectDid = getEndorsedActorDid(record)
+      if (
+        subjectDid === undefined ||
+        context.endorsedActor?.did !== subjectDid
+      ) {
+        throw endorsementSubjectInvariantError()
+      }
+      return {
+        $type: 'org.hypercerts.feed.defs#actorView',
+        ...context.endorsedActor,
+      }
+    }
+    default:
+      return undefined
   }
 }
