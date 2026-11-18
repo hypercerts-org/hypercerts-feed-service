@@ -89,7 +89,7 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
 
 `feedId`: `org.hypercerts.feed.defs#maearthFeed`
 
-Off by default; set `MAEARTH_FEED_ENABLED=true` to turn it on (it is on for all three hosted instances). When off, requests for it return `UnsupportedFeed`. Kinds: `update`, `repost`, `project-follow`, `account-follow`. Optional params: `kinds` and `actorDid` (narrows the viewer's Following scope to one author).
+Off by default; set `MAEARTH_FEED_ENABLED=true` to turn it on (it is on for all three hosted instances). When off, requests for it return `UnsupportedFeed`. Kinds: `update`, `repost`, `project-follow`, `account-follow`, `funding-receipt`. Optional params: `kinds` and `actorDid` (narrows the viewer's Following scope to one author).
 
 ```bash
 curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
@@ -131,7 +131,9 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
 }
 ```
 
-`author` is the record's author. `createdAt` is the record's own value, unchanged, and is omitted when it is unusable; `sortAt` is the time the feed ordered by. A repost and a project follow carry a `recordView` `subject`, an account follow an `actorView`, and an `update` none. Counts always describe the URI beside them: an `update` carries its own `likeCount`, `repostCount` and `replyCount`, while a repost's numbers (its original post's) sit on its `subject`; follows have none.
+`author` is the record's author. `createdAt` is the record's own value, unchanged, and is omitted when it is unusable; `sortAt` is the time the feed ordered by. A repost and a project follow carry a `recordView` `subject`, an account follow an `actorView`, and an `update` and a `funding-receipt` none. Counts always describe the URI beside them: an `update` carries its own `likeCount`, `repostCount` and `replyCount`, a `funding-receipt` its own `likeCount` and `repostCount` only, while a repost's numbers (its original post's) sit on its `subject`; follows have none.
+
+A `funding-receipt` is a plain `org.hypercerts.funding.receipt` record: it appears when it is for a followed project or to or from a followed account, its `author` is the account that published it, and it is sorted by its `occurredAt` (its `createdAt` stays the record's own value, so it can be later than the items listed after it; order by `sortAt`).
 
 Full request rules, selection, errors, and pagination: [docs/api.md](docs/api.md).
 
