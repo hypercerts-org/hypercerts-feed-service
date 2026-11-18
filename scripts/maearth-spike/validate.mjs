@@ -262,7 +262,7 @@ async function bootstrap() {
   }
   await pool.query(`GRANT CONNECT ON DATABASE happyview TO maearth_reader;
     GRANT USAGE ON SCHEMA public TO maearth_reader;
-    GRANT SELECT ON happyview_records, happyview_labels TO maearth_reader;
+    GRANT SELECT ON happyview_records, happyview_labels, happyview_record_refs TO maearth_reader;
     ALTER ROLE maearth_reader SET default_transaction_read_only = on`)
   const token = `hv_${randomBytes(16).toString('hex')}`
   const userId = randomUUID()
@@ -603,11 +603,17 @@ async function verify() {
     [...new Set(hydrated.feed.map((item) => item.view.kind))].sort(),
     ['accountFollow', 'post', 'projectFollow', 'repost'],
   )
+  // The view repeats the record's own createdAt text, here the same string the mock wrote.
   assert(hydrated.feed.every((item) => item.view.createdAt === createdAt))
-  assert.equal(
-    hydrated.feed.find((item) => item.view.kind === 'repost').view
-      .repostedPostUri,
-    original,
+  // Every kind carries its record's author, the subject URI's authority.
+  assert(
+    hydrated.feed.every(
+      (item) => item.view.actor?.did === item.subject.split('/')[2],
+    ),
+  )
+  assert.deepEqual(
+    hydrated.feed.find((item) => item.view.kind === 'repost').view.target,
+    { uri: original },
   )
   const viewOf = (index) =>
     hydrated.feed.find((item) => item.subject === uriOf(events[index])).view
@@ -618,22 +624,20 @@ async function verify() {
   ]) {
     const view = viewOf(index)
     assert.equal(view.kind, 'accountFollow')
-    assert.equal(view.followedDid, followedDid)
-    assert(!('followedProjectUri' in view))
+    assert.deepEqual(view.target, { did: followedDid })
   }
   for (const index of [1, 10]) {
     const view = viewOf(index)
     assert.equal(view.kind, 'projectFollow')
-    assert.equal(view.followedProjectUri, project)
-    assert(!('followedDid' in view))
+    assert.deepEqual(view.target, { uri: project })
   }
   for (const index of [2, 3, 4, 11, 15]) {
     const view = viewOf(index)
-    assert(!('followedDid' in view) && !('followedProjectUri' in view))
+    assert(!('target' in view))
   }
   evidence.sample = hydrated
   check(
-    'Both HTTP endpoints: scope, all four kinds, microsecond sort time, follow targets and URI-only skeleton',
+    'Both HTTP endpoints: scope, all four kinds, record createdAt, actor, targets and URI-only skeleton',
   )
   check(
     'Project resolution through real ingestion: a project-type collection counts, an activity-only post matches through its items[], and favorites-type and never-stored collections are excluded',

@@ -14,7 +14,7 @@ patterns AS NOT MATERIALIZED (
     'app.certified.feed.repost'::text AS repost_nsid,
     'app.certified.feed.like'::text AS like_nsid,
     'org.hypercerts.collection'::text AS collection_nsid,
-    -- The sort value is returned to clients and re-read as a cursor, so every
+    -- The sort value is handed back to clients inside the cursor and re-read from it, so every
     -- effective timestamp must render as a valid four-digit-year atproto datetime.
     -- This floor applies to createdAt and indexed_at; the cutoff below keeps the
     -- top far under year 9999.
@@ -239,7 +239,7 @@ classified AS (
         (field.via IS NULL OR field.via = 'null'::jsonb)
         AND jsonb_typeof(field.subject) = 'string'
         AND field.subject_text ~ patterns.did
-        -- followedDid is returned and output-validated; an overlong DID would fail the page.
+        -- target.did is returned and output-validated; an overlong DID would fail the page.
         AND length(field.subject_text) <= 2048
         AND (
           event.did IN (SELECT did FROM followed_accounts)
@@ -249,7 +249,7 @@ classified AS (
         event.did IN (SELECT did FROM followed_accounts)
         AND jsonb_typeof(field.subject->'uri') = 'string'
         AND field.subject_uri ~ patterns.post_uri
-        -- repostedPostUri is output-validated as an at-uri. The pattern fixes the
+        -- target.uri is output-validated as an at-uri. The pattern fixes the
         -- shape (so the whole URI stays under 8192 characters); this also bounds
         -- the DID authority to 2048 and the record key to 512, neither '.' nor '..'.
         AND length(split_part(field.subject_uri, '/', 3)) <= 2048
