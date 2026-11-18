@@ -32,7 +32,10 @@ issues=$(psql "$TEST_DATABASE_URL" \
         ('happyview_labels', 'uri', 'text'),
         ('happyview_labels', 'val', 'text'),
         ('happyview_labels', 'cts', 'text'),
-        ('happyview_labels', 'exp', 'text')
+        ('happyview_labels', 'exp', 'text'),
+        ('happyview_record_refs', 'source_uri', 'text'),
+        ('happyview_record_refs', 'target_uri', 'text'),
+        ('happyview_record_refs', 'collection', 'text')
     ),
     column_issues AS (
       SELECT format(
