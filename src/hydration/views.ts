@@ -237,7 +237,11 @@ export const buildItemSubject = (
         ...context.endorsedActor,
       }
     }
-    default:
+    case 'cert':
+    case 'collection':
+    case 'project-with-cert':
+    case 'measurement':
+    case 'update':
       return undefined
   }
 }

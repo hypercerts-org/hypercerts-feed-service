@@ -15,6 +15,7 @@ import {
 } from '../src/feed/types.js'
 import { HydratedFeedService } from '../src/hydration/service.js'
 import type { ActorContext, IdentityReader } from '../src/hydration/types.js'
+import { $output } from '../src/lexicons/org/hypercerts/feed/getFeed.js'
 
 const viewerDid = 'did:plc:ar7c4by46qjdydhdevvrndac'
 const authorDid = 'did:plc:ewvi7nxzyoun6zhxrhs64oiz'
@@ -230,6 +231,8 @@ describe('HydratedFeedService', () => {
       expect(item).not.toHaveProperty('record')
       expect(item).not.toHaveProperty('actorDid')
     }
+    // The built items are what the procedure serves, so they must satisfy the Lexicon.
+    expect(() => $output.schema.$parse(output)).not.toThrow()
   })
 
   it('lists measured records as references without discovering or reading their identities', async () => {
@@ -270,6 +273,7 @@ describe('HydratedFeedService', () => {
         subjects: [{ uri: targetUri, cid }],
       },
     })
+    expect(() => $output.schema.$parse(output)).not.toThrow()
   })
 
   it('drops an entirely invalid selected page, skips identities, and preserves its cursor bytes', async () => {
