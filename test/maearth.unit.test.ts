@@ -73,13 +73,32 @@ const accountFollowRow = (overrides: Record<string, unknown> = {}) =>
     ...overrides,
   })
 
+const receiptRow = (overrides: Record<string, unknown> = {}) =>
+  repostRow({
+    uri: `at://${followedDid}/org.hypercerts.funding.receipt/one`,
+    collection: 'org.hypercerts.funding.receipt',
+    actor_did: followedDid,
+    kind: 'funding-receipt',
+    reposted_post_uri: null,
+    reposted_post_cid: null,
+    // Likes and reposts only: a receipt is not replied to.
+    reply_count: null,
+    ...overrides,
+  })
+
 const decodeCursorPayload = (cursor: string): unknown =>
   JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
 
 describe('MaEarth feed boundary', () => {
   it('rejects unsupported and former camelCase kinds and out-of-range pagination before querying', async () => {
     const { query, service } = setup()
-    for (const kind of ['donation', 'post', 'projectFollow', 'accountFollow']) {
+    for (const kind of [
+      'donation',
+      'post',
+      'projectFollow',
+      'accountFollow',
+      'fundingReceipt',
+    ]) {
       await expect(
         service.getFeed({
           ...request,
@@ -89,7 +108,7 @@ describe('MaEarth feed boundary', () => {
         code: 'InvalidRequest',
         status: 422,
         message: expect.stringContaining(
-          'use update, repost, project-follow, account-follow',
+          'use update, repost, project-follow, account-follow, funding-receipt',
         ) as unknown,
       })
     }
@@ -217,7 +236,7 @@ describe('MaEarth feed query contract', () => {
       params: {
         ...request.params,
         actorDid: 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
-        kinds: ['update', 'repost', 'update'],
+        kinds: ['update', 'repost', 'funding-receipt', 'update'],
       },
       limit: 5,
       cursor: page.cursor,
@@ -225,7 +244,7 @@ describe('MaEarth feed query contract', () => {
     expect(query.mock.calls[2]?.[1]).toEqual([
       viewerDid,
       'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
-      ['update', 'repost'],
+      ['update', 'repost', 'funding-receipt'],
       rows[0]?.sort_value,
       rows[0]?.uri,
       6,
@@ -276,7 +295,7 @@ describe('MaEarth feed query contract', () => {
     },
   )
 
-  it("returns each kind's flat item with its own subject, puts a repost's counts on its subject, and keeps them out of the skeleton", async () => {
+  it("returns each kind's flat item with its own subject, puts a repost's counts on its subject, gives a receipt its own counts without a subject or reply count, and keeps counts out of the skeleton", async () => {
     const { query, pages, service } = setup()
     const otherCid =
       'bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm'
@@ -296,6 +315,7 @@ describe('MaEarth feed query contract', () => {
         reposted_post_uri: null,
         reposted_post_cid: null,
       }),
+      receiptRow({ like_count: 4, repost_count: 0 }),
     ]
     query.mockResolvedValue({ rows })
     const sortAt = '2026-10-14T12:00:00.123456Z'
@@ -354,6 +374,17 @@ describe('MaEarth feed query contract', () => {
         likeCount: 3,
         repostCount: 2,
         replyCount: 1,
+      },
+      {
+        uri: rows[4]?.uri,
+        cid: recordCid,
+        // The publisher of the receipt record.
+        author: { did: followedDid },
+        kind: 'funding-receipt',
+        sortAt,
+        createdAt,
+        likeCount: 4,
+        repostCount: 0,
       },
     ])
     expect(await new FeedService(pages).getFeedSkeleton(request)).toEqual({
@@ -426,6 +457,24 @@ describe('MaEarth feed query contract', () => {
         reposted_post_cid: null,
         followed_did: followedDid,
       }),
+    ],
+    [
+      'a funding-receipt carrying a repost target',
+      receiptRow({
+        reposted_post_uri: `at://${followedDid}/org.hypercerts.context.attachment/post`,
+      }),
+    ],
+    [
+      'a funding-receipt carrying a repost CID',
+      receiptRow({ reposted_post_cid: recordCid }),
+    ],
+    [
+      'a funding-receipt carrying a project URI',
+      receiptRow({ followed_project_uri: followedProject }),
+    ],
+    [
+      'a funding-receipt carrying a DID',
+      receiptRow({ followed_did: followedDid }),
     ],
     ['a repost without a target URI', repostRow({ reposted_post_uri: null })],
     [
@@ -516,6 +565,15 @@ describe('MaEarth count projection', () => {
       repostRow({ reply_count: 2 ** 53 }),
     ],
     ['a count returned as text', repostRow({ like_count: '3' })],
+    ['a funding-receipt with a reply count', receiptRow({ reply_count: 0 })],
+    [
+      'a funding-receipt without a like count',
+      receiptRow({ like_count: null }),
+    ],
+    [
+      'a funding-receipt without a repost count',
+      receiptRow({ repost_count: null }),
+    ],
     ['a project-follow with a count', projectFollowRow({ like_count: 0 })],
     ['an account-follow with a count', accountFollowRow({ reply_count: 1 })],
   ])('fails closed on %s', async (_label, row) => {

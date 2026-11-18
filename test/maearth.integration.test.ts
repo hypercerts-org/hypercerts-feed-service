@@ -131,6 +131,31 @@ const comment = (
     subjects: subjectUris.map((uri) => ({ uri, cid })),
     ...extra,
   })
+/** An `app.certified.defs#did` party, the only `from`/`to` variant a receipt rule matches. */
+const didParty = (actor: string) => ({
+  $type: 'app.certified.defs#did',
+  did: actor,
+})
+/**
+ * Stores a receipt that matches no rule by default: `to` and `for` name unrelated
+ * accounts and `from` is absent. Each test overrides only the field it exercises.
+ */
+const receipt = (
+  author: string,
+  body: Record<string, unknown> = {},
+  options: { key?: string; indexedAt?: string | null } = {},
+) =>
+  seed(
+    author,
+    'org.hypercerts.funding.receipt',
+    {
+      to: didParty(did()),
+      for: { uri: project(did(), 'unrelated'), cid },
+      amount: '10',
+      ...body,
+    },
+    options,
+  )
 /** Stores a current org.hypercerts.collection record at `project(actor, key)`. */
 const seedCollection = (
   actor: string,
@@ -1139,5 +1164,354 @@ describe('MaEarth item counts', () => {
       [liked, viewerFollow].sort(),
     )
     for (const item of skeleton.feed) expect(Object.keys(item)).toEqual(['uri'])
+  })
+})
+
+describe('MaEarth funding receipts', () => {
+  it('selects a receipt only when it is for a followed project, or to or from a followed account', async () => {
+    const viewer = did(),
+      platform = did(),
+      followedAuthor = did(),
+      org = did(),
+      funder = did(),
+      owner = did(),
+      stranger = did()
+    await seedCollection(owner, 'project')
+    await seedCollection(owner, 'favorites', { key: 'favorites' })
+    await entityFollow(viewer, project(owner))
+    await entityFollow(viewer, project(owner, 'favorites'))
+    await follow(viewer, org)
+    await follow(viewer, funder)
+    await follow(viewer, followedAuthor)
+    const forProject = { for: { uri: project(owner), cid } }
+
+    const included = [
+      // Rule 1: for.uri is a followed project, whatever `to` and `from` say.
+      await receipt(platform, {
+        ...forProject,
+        from: didParty(stranger),
+      }),
+      // Anonymous: no `from`, still reaches project followers.
+      await receipt(platform, forProject),
+      // Rule 2: `to` is a followed account; no `from` needed.
+      await receipt(platform, { to: didParty(org) }),
+      // Rule 3: `from` is a followed account.
+      await receipt(platform, { from: didParty(funder) }),
+      // Authorship never qualifies, but an author that is followed does not hide a match.
+      await receipt(followedAuthor, forProject),
+      // The viewer is no special case: their receipts count only through rules 1 and 2.
+      await receipt(platform, { ...forProject, from: didParty(viewer) }),
+      await receipt(platform, { to: didParty(org), from: didParty(viewer) }),
+    ]
+    await receipt(platform, { to: didParty(did()), from: didParty(did()) })
+    await receipt(platform, { from: didParty(viewer) })
+    await receipt(platform, { to: didParty(viewer) })
+    // A followed account or the viewer publishing a receipt that matches no rule.
+    await receipt(followedAuthor)
+    await receipt(viewer)
+    // A followed collection that is not a project is not a followed project.
+    await receipt(platform, { for: { uri: project(owner, 'favorites'), cid } })
+
+    expect(await uris(viewer, { kinds: ['funding-receipt'] })).toEqual(
+      [...included].sort(),
+    )
+
+    // Nothing followed means nothing to match, including the viewer's own receipts.
+    const lonely = did()
+    await receipt(lonely, { from: didParty(lonely), to: didParty(lonely) })
+    await receipt(platform, { from: didParty(lonely) })
+    expect(await uris(lonely, { kinds: ['funding-receipt'] })).toEqual([])
+  })
+
+  it('selects receipts to or from a followed account for a viewer who follows no project', async () => {
+    const viewer = did(),
+      platform = did(),
+      org = did()
+    await follow(viewer, org)
+    const toOrg = await receipt(platform, { to: didParty(org) })
+    const fromOrg = await receipt(platform, { from: didParty(org) })
+    await receipt(platform, { from: didParty(did()) })
+    expect(await uris(viewer, { kinds: ['funding-receipt'] })).toEqual(
+      [toOrg, fromOrg].sort(),
+    )
+  })
+
+  it('ignores from and to variants that are not app.certified.defs#did', async () => {
+    const viewer = did(),
+      platform = did(),
+      org = did(),
+      owner = did()
+    await seedCollection(owner, 'project')
+    await entityFollow(viewer, project(owner))
+    await follow(viewer, org)
+    const strongRef = { uri: project(owner), cid }
+    const matching = await receipt(platform, { to: didParty(org) })
+    for (const party of [
+      // Text and strongRef variants never name an account.
+      { $type: 'org.hypercerts.funding.receipt#text', value: org },
+      { $type: 'com.atproto.repo.strongRef', ...strongRef },
+      strongRef,
+      // The right DID under another $type or as a bare string is not a DID party.
+      { $type: 'org.hypercerts.funding.receipt#text', did: org },
+      { did: org },
+      org,
+      [didParty(org)],
+      // The right $type but a DID that is not a string.
+      { ...didParty(org), did: 42 },
+    ]) {
+      await receipt(platform, { to: party })
+      await receipt(platform, { from: party })
+    }
+    expect(await uris(viewer, { kinds: ['funding-receipt'] })).toEqual([
+      matching,
+    ])
+  })
+
+  it('returns a flat item with the publisher as author, no subject or content, and honours the kinds and actorDid filters', async () => {
+    const viewer = did(),
+      platform = did(),
+      other = did(),
+      owner = did()
+    await seedCollection(owner, 'project')
+    const followEdge = await entityFollow(viewer, project(owner))
+    const forProject = { for: { uri: project(owner), cid } }
+    // The payment happened two hours before the record was written.
+    const byPlatform = await receipt(platform, {
+      ...forProject,
+      occurredAt: '2026-10-14T10:00:00Z',
+      type: 'donation',
+      currency: 'USD',
+      notes: 'must not be copied',
+    })
+    // createdAt is the record's own text, not UTC-normalized and not occurredAt.
+    const ownCreatedAt = '2026-10-14T14:30:00.5+02:00'
+    const byOther = await receipt(other, {
+      ...forProject,
+      createdAt: ownCreatedAt,
+    })
+    // An unusable createdAt is omitted, never replaced by occurredAt or the sort time.
+    const noCreatedAt = await receipt(platform, {
+      ...forProject,
+      occurredAt: '2026-10-14T09:00:00Z',
+      createdAt: '2026-10-14T09:30:00-00:00',
+    })
+    const aboutProject = await update(other, {
+      subjects: [{ uri: project(owner), cid }],
+    })
+
+    const { feed } = await service.getFeed(
+      request(viewer, { kinds: ['funding-receipt'] }),
+    )
+    // Exact items: no subject, content or replyCount keys, and no source fields.
+    expect(feed).toEqual([
+      {
+        uri: byOther,
+        cid,
+        author: { did: other },
+        kind: 'funding-receipt',
+        sortAt: '2026-10-14T12:30:00.500000Z',
+        createdAt: ownCreatedAt,
+        likeCount: 0,
+        repostCount: 0,
+      },
+      {
+        uri: byPlatform,
+        cid,
+        author: { did: platform },
+        kind: 'funding-receipt',
+        // The sort time is occurredAt; createdAt is still the record's own.
+        sortAt: '2026-10-14T10:00:00.000000Z',
+        createdAt: '2026-10-14T12:00:00Z',
+        likeCount: 0,
+        repostCount: 0,
+      },
+      {
+        uri: noCreatedAt,
+        cid,
+        author: { did: platform },
+        kind: 'funding-receipt',
+        sortAt: '2026-10-14T09:00:00.000000Z',
+        likeCount: 0,
+        repostCount: 0,
+      },
+    ])
+
+    expect(await uris(viewer, { kinds: ['update'] })).toEqual([aboutProject])
+    // Omitting kinds includes receipts alongside every other kind.
+    expect(await uris(viewer)).toEqual(
+      [byPlatform, byOther, noCreatedAt, aboutProject, followEdge].sort(),
+    )
+    // actorDid narrows by the receipt's author, even for an author the viewer does not follow.
+    expect(
+      await uris(viewer, { kinds: ['funding-receipt'], actorDid: platform }),
+    ).toEqual([byPlatform, noCreatedAt].sort())
+    expect(await uris(viewer, { actorDid: other })).toEqual(
+      [byOther, aboutProject].sort(),
+    )
+    expect(await uris(viewer, { actorDid: did() })).toEqual([])
+  })
+
+  it('counts distinct likers and reposters of a receipt on the item, and has no reply count', async () => {
+    const viewer = did(),
+      platform = did(),
+      owner = did(),
+      [likerA, likerB, reposterA, reposterB, replier] = [
+        did(),
+        did(),
+        did(),
+        did(),
+        did(),
+      ]
+    await seedCollection(owner, 'project')
+    await entityFollow(viewer, project(owner))
+    const forProject = { for: { uri: project(owner), cid } }
+    const counted = await receipt(platform, forProject)
+    const untouched = await receipt(platform, forProject)
+    const target = { uri: counted, cid }
+
+    // Distinct DIDs, matched by the receipt's own URI whatever the CID.
+    await like(likerA, target)
+    await like(likerA, { uri: counted, cid: 'ignored' })
+    await like(likerB, target)
+    await repost(reposterA, target)
+    await repost(reposterB, { uri: counted })
+    // A wrong $type, or a like of another record that names the receipt only in via, is not a like of it.
+    await like(did(), target, { $type: 'app.certified.feed.repost' })
+    await like(did(), { uri: untouched, cid }, { via: target })
+    // A comment on the receipt is not counted: receipts carry no reply count.
+    await comment(replier, [counted])
+
+    const { feed } = await service.getFeed(
+      request(viewer, { kinds: ['funding-receipt'] }),
+    )
+    const itemOf = (uri: string): ItemView => {
+      const entry = feed.find((item) => item.uri === uri)
+      if (entry === undefined) throw new Error(`Missing feed item ${uri}`)
+      return entry
+    }
+    expect(itemOf(counted)).toMatchObject({ likeCount: 2, repostCount: 2 })
+    expect(itemOf(untouched)).toMatchObject({ likeCount: 1, repostCount: 0 })
+    expect(itemOf(counted)).not.toHaveProperty('replyCount')
+    expect(itemOf(untouched)).not.toHaveProperty('replyCount')
+  })
+
+  it('leaves receipt counts out of the skeleton and returns the same URIs', async () => {
+    const viewer = did(),
+      platform = did(),
+      org = did()
+    await follow(viewer, org)
+    const liked = await receipt(platform, { to: didParty(org) })
+    await like(did(), { uri: liked, cid })
+    const skeleton = await new FeedService(registry).getFeedSkeleton(
+      request(viewer, { kinds: ['funding-receipt'] }),
+    )
+    expect(skeleton.feed).toEqual([{ uri: liked }])
+  })
+
+  it('sorts by occurredAt, then createdAt, then indexed_at, and pages without gaps', async () => {
+    const viewer = did(),
+      platform = did(),
+      author = did(),
+      owner = did()
+    await seedCollection(owner, 'project')
+    await entityFollow(viewer, project(owner))
+    await follow(viewer, author)
+    const forProject = { for: { uri: project(owner), cid } }
+    const at = (time: string) => `2026-10-14T${time}Z`
+    const hidden = { createdAt: at('12:19:00') }
+
+    // An update's occurredAt is not a time: it keeps its own createdAt.
+    const withOccurredAt = await update(author, {
+      createdAt: at('12:25:00'),
+      occurredAt: '2099-06-01T00:00:00Z',
+    })
+    // No occurredAt: createdAt.
+    const byCreated = await receipt(platform, {
+      ...forProject,
+      createdAt: at('12:20:00'),
+    })
+    // occurredAt wins over a later createdAt; offsets are normalized to UTC.
+    const offset = await receipt(platform, {
+      ...forProject,
+      occurredAt: '2026-10-14T14:15:00+02:00',
+      createdAt: at('12:40:00'),
+    })
+    // Equal instants are ordered by URI descending, whichever field supplied them.
+    const tieA = await receipt(
+      platform,
+      { ...forProject, occurredAt: at('12:10:00'), createdAt: at('12:30:00') },
+      { key: 'tie-a' },
+    )
+    const tieB = await receipt(
+      platform,
+      { ...forProject, createdAt: at('12:10:00') },
+      { key: 'tie-b' },
+    )
+    // An unusable occurredAt falls back to createdAt: malformed, impossible,
+    // -00:00 (unknown offset), a non-string and before year 1.
+    const unusable = [
+      ['yesterday', '12:05:00'],
+      ['2026-13-45T12:00:00Z', '12:04:00'],
+      ['2026-10-14T12:50:00-00:00', '12:03:00'],
+      [42, '12:02:00'],
+      ['0001-01-01T00:00:00+05:00', '12:01:00'],
+    ] as const
+    const fallbacks: string[] = []
+    for (const [occurredAt, createdAt] of unusable)
+      fallbacks.push(
+        await receipt(platform, {
+          ...forProject,
+          occurredAt,
+          createdAt: at(createdAt),
+        }),
+      )
+    // Neither field usable: indexed_at.
+    const indexed = await receipt(
+      platform,
+      { ...forProject, occurredAt: 'bad', createdAt: 'bad' },
+      { indexedAt: '2026-10-14 12:00:30+00' },
+    )
+    // A parseable future occurredAt is hidden, not re-dated to its createdAt.
+    await receipt(platform, {
+      ...forProject,
+      occurredAt: '2099-06-01T00:00:00Z',
+      ...hidden,
+    })
+    await receipt(platform, {
+      ...forProject,
+      occurredAt: minutesFromNow(10),
+      ...hidden,
+    })
+
+    const expected = [
+      withOccurredAt,
+      byCreated,
+      offset,
+      tieB,
+      tieA,
+      ...fallbacks,
+      indexed,
+    ]
+    const times = [
+      '12:25:00',
+      '12:20:00',
+      '12:15:00',
+      '12:10:00',
+      '12:10:00',
+      '12:05:00',
+      '12:04:00',
+      '12:03:00',
+      '12:02:00',
+      '12:01:00',
+      '12:00:30',
+    ].map((time) => `2026-10-14T${time}.000000Z`)
+    for (const limit of [1, 3, 50]) {
+      const items = await collect(viewer, {
+        kinds: ['update', 'funding-receipt'],
+        limit,
+      })
+      expect(items.map((item) => item.uri)).toEqual(expected)
+      expect(items.map((item) => item.sortValue)).toEqual(times)
+    }
   })
 })
