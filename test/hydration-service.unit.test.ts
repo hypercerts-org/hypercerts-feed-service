@@ -302,6 +302,60 @@ describe('HydratedFeedService', () => {
     expect(identities.calls).toEqual([])
   })
 
+  it('drops a record whose strong-reference URI the public output would reject, like any invalid source, and keeps the cursor', async () => {
+    const ref = (uri: string) => ({
+      $type: 'com.atproto.repo.strongRef',
+      uri,
+      cid,
+    })
+    const activityTarget = `at://${targetDid}/org.hypercerts.claim.activity`
+    const pages = new FakePages({
+      rows: [
+        sourceRow(),
+        // The record validator accepts a `..` record key and a query string; the output at-uri check does not.
+        sourceRow({
+          uri: measurementUri,
+          actorDid: invalidAuthorDid,
+          collection: 'org.hypercerts.context.measurement',
+          kind: 'measurement',
+          sourceValue: {
+            $type: 'org.hypercerts.context.measurement',
+            metric: 'hectares restored',
+            unit: 'ha',
+            value: '42',
+            subjects: [ref(targetUri), ref(`${activityTarget}/3k?x=1`)],
+            createdAt,
+          },
+        }),
+        sourceRow({
+          uri: `at://${invalidAuthorDid}/org.hypercerts.context.evaluation/evaluation`,
+          actorDid: invalidAuthorDid,
+          collection: 'org.hypercerts.context.evaluation',
+          kind: 'evaluation',
+          sourceValue: {
+            $type: 'org.hypercerts.context.evaluation',
+            evaluators: [{ $type: 'app.certified.defs#did', did: authorDid }],
+            summary: 'Strong evidence',
+            subject: ref(`${activityTarget}/..`),
+            createdAt,
+          },
+        }),
+      ],
+      cursor,
+    })
+    const identities = new FakeIdentities(allContexts())
+
+    const output = await new HydratedFeedService(pages, identities).getFeed(
+      feedRequest(),
+    )
+
+    expect(output.feed.map((item) => item.uri)).toEqual([activityUri])
+    expect(output.cursor).toBe(cursor)
+    // Only the kept record's author is looked up.
+    expect(identities.calls).toEqual([[authorDid]])
+    expect(() => $output.schema.$parse(output)).not.toThrow()
+  })
+
   it('skips identity retrieval for an empty page and preserves its cursor bytes', async () => {
     const pages = new FakePages({ rows: [], cursor })
     const identities = new FakeIdentities(new Map())

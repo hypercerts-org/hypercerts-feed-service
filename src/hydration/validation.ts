@@ -11,6 +11,7 @@ import {
 } from '@hypercerts-org/lexicon'
 
 import type { FeedKind } from '../feed/types.js'
+import { recordView } from '../lexicons/org/hypercerts/feed/defs.js'
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/jpeg',
@@ -61,6 +62,18 @@ const hasValidKnownBlob = (
   if (!isObject(value) || value.$type !== type) return true
   return hasValidBlobRef(value.image, maxSize, ALLOWED_IMAGE_MIME_TYPES)
 }
+
+/**
+ * Whether a strong reference passes the public `recordView` check. The record
+ * validator accepts some URIs that check rejects (a `..` record key, a query
+ * string, an over-long key), and one such reference would fail the whole page,
+ * so a record carrying one is an invalid source.
+ */
+const hasValidRecordReference = (
+  reference: { readonly uri: string; readonly cid: string } | undefined,
+): boolean =>
+  reference === undefined ||
+  recordView.schema.$matches({ uri: reference.uri, cid: reference.cid })
 
 const hasValidKnownSmallBlob = (value: unknown): boolean => {
   if (!isObject(value) || value.$type !== 'org.hypercerts.defs#smallBlob') {
@@ -233,6 +246,7 @@ const validateEvaluationRecord = (
   const result = OrgHypercertsContextEvaluation.validateRecord(parsedValue)
   if (
     !result.success ||
+    !hasValidRecordReference(result.value.subject) ||
     (result.value.content !== undefined &&
       !result.value.content.every(hasValidKnownSmallBlob))
   ) {
@@ -254,7 +268,12 @@ const validateMeasurementRecord = (
   if (kind !== 'measurement') return undefined
 
   const result = OrgHypercertsContextMeasurement.validateRecord(parsedValue)
-  if (!result.success) return undefined
+  if (
+    !result.success ||
+    !(result.value.subjects ?? []).every(hasValidRecordReference)
+  ) {
+    return undefined
+  }
   return {
     kind,
     collection: 'org.hypercerts.context.measurement',
@@ -273,6 +292,7 @@ const validateUpdateRecord = (
   const result = OrgHypercertsContextAttachment.validateRecord(parsedValue)
   if (
     !result.success ||
+    !(result.value.subjects ?? []).every(hasValidRecordReference) ||
     (result.value.content !== undefined &&
       !result.value.content.every(hasValidKnownSmallBlob))
   ) {
