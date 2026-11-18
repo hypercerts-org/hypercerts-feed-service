@@ -130,10 +130,10 @@ MaEarth `getFeed` counts reactions to each page's posts in the same statement, a
 
 These are the rules of the api.hypercerts.dev `getReactionCounts` and `getCommentCounts` endpoints, plus the `$type` check (those endpoints do not make it) and guarded JSON decoding (they cast `record::jsonb` unguarded).
 
-**The refs table must be complete.** The service trusts it to find candidates; a record missing from it is never counted. HappyView writes refs best-effort: failures of the write are ignored, an update deletes and re-inserts a record's refs without a transaction, and the one-time fill at startup runs only when the table is empty, so a partly filled table is never repaired. A record indexed before HappyView added the table depends on that one-time fill. The service cannot detect or repair this: HappyView owns the table, and a rebuild is a HappyView action. Re-check it periodically on the HappyView database. This query only reads; the `READ ONLY` transaction enforces that:
+**The refs table must be complete.** The service trusts it to find candidates; a record missing from it is never counted. HappyView writes refs best-effort: failures of the write are ignored, an update deletes and re-inserts a record's refs without a transaction, and the one-time fill at startup runs only when the table is empty, so a partly filled table is never repaired. A record indexed before HappyView added the table depends on that one-time fill. The service cannot detect or repair this: HappyView owns the table, and a rebuild is a HappyView action. Re-check it periodically on the HappyView database. This query only reads; the `READ ONLY` transaction enforces that, and `REPEATABLE READ` gives all three statements one snapshot, so a record indexed between them cannot show up as `missing`. It audits the same records the service counts (`$type` equal to the collection):
 
 ```sql
-BEGIN READ ONLY;
+BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY;
 SET LOCAL statement_timeout = '120s';
 
 -- Rows in the table at all.
@@ -149,6 +149,7 @@ WITH reaction AS (
     OFFSET 0
   ) AS decoded
   WHERE source.collection IN ('app.certified.feed.like', 'app.certified.feed.repost')
+    AND decoded.value->>'$type' = source.collection
 )
 SELECT collection, count(*) AS records,
   count(*) FILTER (WHERE NOT EXISTS (
@@ -173,6 +174,7 @@ WITH reply AS (
       THEN decoded.value->'subjects' ELSE '[]'::jsonb END
   ) AS listed(value)
   WHERE source.collection = 'org.hypercerts.context.attachment'
+    AND decoded.value->>'$type' = source.collection
     AND decoded.value->>'contentType' = 'comment'
 )
 SELECT count(*) AS links,
@@ -186,7 +188,7 @@ WHERE target LIKE 'at://%';
 ROLLBACK;
 ```
 
-A healthy table has `ref_rows` above zero and `missing = 0` in both result sets. Any `missing` above zero means counts undercount those posts until HappyView repairs the table. The integration fixture inserts refs rows itself, so the suite proves the count rules, not HappyView's refs ingestion. Index changes belong in HappyView and need production-shaped `EXPLAIN (ANALYZE, BUFFERS)` evidence; there is none for this lookup yet.
+The criterion is `missing = 0` in both result sets. `ref_rows = 0` is fine when no like, repost or comment records exist yet; it is a problem only when such records do exist, and then `missing` shows it. Any `missing` above zero means counts undercount those posts until HappyView repairs the table. The integration fixture inserts refs rows itself, so the suite proves the count rules, not HappyView's refs ingestion. Index changes belong in HappyView and need production-shaped `EXPLAIN (ANALYZE, BUFFERS)` evidence; there is none for this lookup yet.
 
 ## Organization-quality labels
 
