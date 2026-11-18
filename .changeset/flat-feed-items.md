@@ -9,3 +9,4 @@
 - `sortAt` is the time the feed is ordered by and the cursor encodes. `createdAt` is the record's own value.
 - `subject` mirrors the record's own `subject`, as a `recordView` or an `actorView`. In Hypercerts items, the evaluation `target` and the endorsement `content.subject` become `subject`, `endorsementView` is removed, and measurement and update `content` list every record in `subjects`. `createdAt` leaves `content`.
 - MaEarth `update` items carry their own `likeCount`, `repostCount` and `replyCount`. A repost item has none; its original post's counts and the CID the repost names are on its `subject`.
+- The Hypercerts feed excludes records whose effective timestamp is outside years 0001 through 9999 UTC, such as a `createdAt` of `9999-12-31T23:59:59-12:00`, so `sortAt` and the cursor are always valid datetimes.
