@@ -108,7 +108,7 @@ Every hydrated feed item comes from a valid source record. Each item has an `aut
 
 The service uses a meaningful, valid Certified profile for an author's (and an endorsed account's) display name and avatar. If no such profile is available, the account is represented by its DID. It does not expose stored handles or fall back to Bluesky profiles.
 
-An evaluation, measurement, or update may point to other records by their exact URI and CID: an evaluation's `subject`, and the `content.subjects[]` of a measurement or update. These remain strong references. The service checks that each reference is valid.
+An evaluation, measurement, or update may point to other records by their exact URI and CID: an evaluation's `subject`, and the `content.subjects[]` of a measurement or update. These remain strong references. The service checks that each reference is valid, as the public `recordView` format sees it (the record validator alone accepts some URIs that format rejects, such as a `..` record key). A record with an invalid reference is an invalid source and is dropped, with its place in the cursor kept.
 
 Clients must accept image, `subject` and `content` formats they do not know. Known images keep their original Hypercerts and AT Protocol formats.
 
