@@ -3,12 +3,16 @@ export const MAEARTH_FEED_ID = 'org.hypercerts.feed.defs#maearthFeed' as const
 export const MAEARTH_FEED_PARAMS_TYPE =
   'org.hypercerts.feed.defs#maearthFeedParams' as const
 
-/** Item kinds of the MaEarth feed. `update` is a post: an attachment with contentType `update`. */
+/**
+ * Item kinds of the MaEarth feed. `update` is a post: an attachment with contentType `update`.
+ * `funding-receipt` is an `org.hypercerts.funding.receipt` record.
+ */
 export const MAEARTH_KINDS = [
   'update',
   'repost',
   'project-follow',
   'account-follow',
+  'funding-receipt',
 ] as const
 export type MaearthKind = (typeof MAEARTH_KINDS)[number]
 

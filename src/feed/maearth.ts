@@ -73,10 +73,11 @@ const isCount = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 
 /**
- * An update and a repost carry all three counts, follows none. A violation is a
- * SQL projection bug, so it fails the request like a mismatched subject does.
- * Where the counts land is decided by `buildItem`: on an update item, and on a
- * repost's subject.
+ * An update and a repost carry all three counts, a funding receipt its own likes
+ * and reposts (it is not replied to), follows none. A violation is a SQL
+ * projection bug, so it fails the request like a mismatched subject does. Where
+ * the counts land is decided by `buildItem`: on an update or receipt item, and
+ * on a repost's subject.
  */
 const rowCounts = (kind: MaearthKind, row: MaearthQueryRow): RowCounts => {
   const { like_count: like, repost_count: repost, reply_count: reply } = row
@@ -88,6 +89,13 @@ const rowCounts = (kind: MaearthKind, row: MaearthQueryRow): RowCounts => {
   )
     return { likeCount: like, repostCount: repost, replyCount: reply }
   if (
+    kind === 'funding-receipt' &&
+    isCount(like) &&
+    isCount(repost) &&
+    reply === null
+  )
+    return { likeCount: like, repostCount: repost }
+  if (
     (kind === 'project-follow' || kind === 'account-follow') &&
     like === null &&
     repost === null &&
@@ -95,7 +103,7 @@ const rowCounts = (kind: MaearthKind, row: MaearthQueryRow): RowCounts => {
   )
     return {}
   throw new Error(
-    'MaEarth query row has counts that do not match its kind: update and repost need non-negative integer like_count, repost_count and reply_count, follows need none; correct the SQL projection before serving requests.',
+    'MaEarth query row has counts that do not match its kind: update and repost need non-negative integer like_count, repost_count and reply_count, funding-receipt the first two only, follows none; correct the SQL projection before serving requests.',
   )
 }
 
@@ -103,8 +111,9 @@ const rowCounts = (kind: MaearthKind, row: MaearthQueryRow): RowCounts => {
  * What the item's record points at, mirroring that record's own `subject`: a
  * repost the original post (with the post's counts and the CID the repost
  * names, when it is a valid CID), a project follow the project (a record
- * subject has no CID), an account follow the account, an update nothing. Each
- * kind carries exactly its own subject columns and no other kind's. A
+ * subject has no CID), an account follow the account, an update and a funding
+ * receipt nothing (a receipt has no single `subject` field). Each kind carries
+ * exactly its own subject columns and no other kind's. A
  * violation is a SQL projection bug, so it fails the request instead of
  * emitting an item the client cannot trust.
  */
@@ -153,7 +162,7 @@ const rowSubject = (
   )
     return { $type: 'org.hypercerts.feed.defs#actorView', did }
   if (
-    kind === 'update' &&
+    (kind === 'update' || kind === 'funding-receipt') &&
     repost === null &&
     repostCid === null &&
     project === null &&
@@ -161,7 +170,7 @@ const rowSubject = (
   )
     return undefined
   throw new Error(
-    "MaEarth query row has a subject that does not match its kind: repost needs a valid reposted_post_uri (and a text or null reposted_post_cid), project-follow a valid followed_project_uri, account-follow a valid followed_did, update none, and no kind may carry another kind's subject; correct the SQL projection before serving requests.",
+    "MaEarth query row has a subject that does not match its kind: repost needs a valid reposted_post_uri (and a text or null reposted_post_cid), project-follow a valid followed_project_uri, account-follow a valid followed_did, update and funding-receipt none, and no kind may carry another kind's subject; correct the SQL projection before serving requests.",
   )
 }
 
@@ -186,9 +195,9 @@ const buildItem = (row: MaearthQueryRow, kind: MaearthKind): ItemView => {
     sortAt: row.sort_value,
     ...(createdAt === undefined ? {} : { createdAt }),
     ...(subject === undefined ? {} : { subject }),
-    // Item counts always count the item's own uri, so only an update has them;
-    // a repost's numbers describe its subject.
-    ...(kind === 'update' ? counts : {}),
+    // Item counts always count the item's own uri, so only an update and a
+    // funding receipt have them; a repost's numbers describe its subject.
+    ...(kind === 'update' || kind === 'funding-receipt' ? counts : {}),
   }
 }
 
