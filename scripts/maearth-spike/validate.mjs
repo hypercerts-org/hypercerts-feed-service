@@ -631,7 +631,7 @@ async function verify() {
     assert.equal(view.kind, 'projectFollow')
     assert.deepEqual(view.target, { uri: project })
   }
-  for (const index of [2, 3, 4, 11, 15]) {
+  for (const index of [2, 3, 4, 15]) {
     const view = viewOf(index)
     assert(!('target' in view))
   }

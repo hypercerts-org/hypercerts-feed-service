@@ -66,8 +66,8 @@ Before cutover, grant the service read-only access to `happyview_records` and `h
 MaEarth cutover checklist, required before setting `MAEARTH_FEED_ENABLED=true`:
 
 1. Grant `SELECT` on `happyview_record_refs` and, as advised, set `jit = off`, using the second block above, then verify `SHOW jit` as described there.
-2. Run the `happyview_record_refs` audit in [database-contract.md](database-contract.md#reaction-counts-and-happyview_record_refs) on the HappyView database. `missing` must be `0` in both result sets; if it is not, HappyView must repair the table first, because the counts would undercount.
-3. Confirm the lexicons the MaEarth feed needs, including `app.certified.feed.like`, are installed, subscribed and backfilled.
+2. Confirm the lexicons the MaEarth feed needs, including `app.certified.feed.like`, are installed, subscribed and backfilled.
+3. Run the `happyview_record_refs` audit in [database-contract.md](database-contract.md#reaction-counts-and-happyview_record_refs) on the HappyView database, once the records are backfilled so it checks what the feed will count. `missing` must be `0` in both result sets; if it is not, HappyView must repair the table first, because the counts would undercount.
 
 ## Deployment
 
