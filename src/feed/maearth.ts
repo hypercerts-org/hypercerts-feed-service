@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 
-import { isValidDid, parseAtUriString } from '@atproto/syntax'
+import { isDatetimeString, isValidDid, parseAtUriString } from '@atproto/syntax'
 import type { QueryResultRow } from 'pg'
 
 import { timestampUriCursor } from './cursor.js'
@@ -13,6 +13,7 @@ import {
   type MaearthFeedParams,
   type MaearthFeedView,
   type MaearthKind,
+  type MaearthTarget,
 } from './maearth-types.js'
 import type { FeedPageLoader, RegisteredFeed } from './registry.js'
 import { defineSqlFeed, type SqlFeedRuntime } from './sql-feed.js'
@@ -35,6 +36,8 @@ interface MaearthQueryRow extends QueryResultRow {
   readonly actor_did: string
   readonly kind: string
   readonly sort_value: string
+  /** The record's own createdAt text when it parsed as a timestamp, else null. */
+  readonly record_created_at: string | null
   readonly reposted_post_uri: string | null
   readonly followed_project_uri: string | null
   readonly followed_did: string | null
@@ -43,11 +46,6 @@ interface MaearthQueryRow extends QueryResultRow {
   readonly repost_count: number | null
   readonly reply_count: number | null
 }
-
-type RowTarget = Pick<
-  MaearthFeedView,
-  'repostedPostUri' | 'followedProjectUri' | 'followedDid'
->
 
 type RowCounts = Pick<
   MaearthFeedView,
@@ -71,37 +69,37 @@ const isRecordUri = (value: unknown, collection: string): value is string => {
 
 /**
  * Each kind carries exactly its own target and no other kind's: reposts the
- * original post, project follows the project, account follows the DID, posts
- * nothing. A violation is a SQL projection bug, so it fails the request
- * instead of emitting a view the client cannot trust.
+ * original post (`uri`), project follows the project (`uri`), account follows
+ * the DID (`did`), posts nothing. A violation is a SQL projection bug, so it
+ * fails the request instead of emitting a view the client cannot trust.
  */
 const rowTarget = (
   kind: MaearthKind,
   { repost, project, did }: { repost: unknown; project: unknown; did: unknown },
-): RowTarget => {
+): MaearthTarget | undefined => {
   if (
     kind === 'repost' &&
     isRecordUri(repost, POST_COLLECTION) &&
     project === null &&
     did === null
   )
-    return { repostedPostUri: repost }
+    return { uri: repost }
   if (
     kind === 'projectFollow' &&
     repost === null &&
     isRecordUri(project, PROJECT_COLLECTION) &&
     did === null
   )
-    return { followedProjectUri: project }
+    return { uri: project }
   if (
     kind === 'accountFollow' &&
     repost === null &&
     project === null &&
     isValidDid(did)
   )
-    return { followedDid: did }
+    return { did }
   if (kind === 'post' && repost === null && project === null && did === null)
-    return {}
+    return undefined
   throw new Error(
     "MaEarth query row has a target that does not match its kind: repost needs a valid reposted_post_uri, projectFollow a valid followed_project_uri, accountFollow a valid followed_did, post none, and no kind may carry another kind's target; correct the SQL projection before serving requests.",
   )
@@ -135,6 +133,36 @@ const rowCounts = (
   throw new Error(
     'MaEarth query row has counts that do not match its kind: post and repost need non-negative integer like_count, repost_count and reply_count, follows need none; correct the SQL projection before serving requests.',
   )
+}
+
+/**
+ * The record's own `createdAt`, unchanged, when it is a valid atproto datetime.
+ * The SQL already requires a real timestamp of at most 64 characters, but the
+ * response parser applies the exact atproto format, and an author must not be
+ * able to fail a page with a value it rejects. Anything else is omitted.
+ */
+const recordCreatedAt = (value: unknown): string | undefined =>
+  typeof value === 'string' && isDatetimeString(value) ? value : undefined
+
+const buildView = (
+  row: MaearthQueryRow,
+  kind: MaearthKind,
+  target: MaearthTarget | undefined,
+): MaearthFeedView => {
+  const createdAt = recordCreatedAt(row.record_created_at)
+  return {
+    $type: 'org.hypercerts.feed.defs#maearthFeedView',
+    kind,
+    ...(createdAt === undefined ? {} : { createdAt }),
+    cid: row.cid,
+    actor: { did: row.actor_did },
+    ...(target === undefined ? {} : { target }),
+    ...rowCounts(kind, {
+      like: row.like_count,
+      repost: row.repost_count,
+      reply: row.reply_count,
+    }),
+  }
 }
 
 // Semantic parameter errors are 422, as for the Hypercerts feed; structurally
@@ -238,23 +266,18 @@ export const createMaearthFeed = (
         sortValue: row.sort_value,
       }
       if (mode === 'metadata') return metadata
-      const counts = rowCounts(row.kind, {
-        like: row.like_count,
-        repost: row.repost_count,
-        reply: row.reply_count,
-      })
-      const view: MaearthFeedView = {
-        $type: 'org.hypercerts.feed.defs#maearthFeedView',
-        kind: row.kind,
-        createdAt: row.sort_value,
-        cid: row.cid,
-        actorDid: row.actor_did,
-        ...target,
-        ...counts,
-      }
+      const view = buildView(row, row.kind, target)
       return { ...metadata, sourceValue: view }
     },
   })
+
+const projectTarget = (target: {
+  readonly uri?: string | undefined
+  readonly did?: string | undefined
+}): MaearthTarget => ({
+  ...(target.uri === undefined ? {} : { uri: target.uri }),
+  ...(target.did === undefined ? {} : { did: target.did }),
+})
 
 /** Projects same-statement merge metadata and counts without identities, repost-target reads or hydration. */
 export class MaearthFeedService {
@@ -274,18 +297,14 @@ export class MaearthFeedService {
       const view: MaearthFeedView = {
         $type: 'org.hypercerts.feed.defs#maearthFeedView',
         kind: parsed.kind,
-        createdAt: parsed.createdAt,
+        ...(parsed.createdAt === undefined
+          ? {}
+          : { createdAt: parsed.createdAt }),
         ...(parsed.cid === undefined ? {} : { cid: parsed.cid }),
-        ...(parsed.actorDid === undefined ? {} : { actorDid: parsed.actorDid }),
-        ...(parsed.repostedPostUri === undefined
+        actor: { did: parsed.actor.did },
+        ...(parsed.target === undefined
           ? {}
-          : { repostedPostUri: parsed.repostedPostUri }),
-        ...(parsed.followedProjectUri === undefined
-          ? {}
-          : { followedProjectUri: parsed.followedProjectUri }),
-        ...(parsed.followedDid === undefined
-          ? {}
-          : { followedDid: parsed.followedDid }),
+          : { target: projectTarget(parsed.target) }),
         ...(parsed.likeCount === undefined
           ? {}
           : { likeCount: parsed.likeCount }),

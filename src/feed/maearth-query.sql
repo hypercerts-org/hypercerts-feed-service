@@ -263,6 +263,7 @@ classified AS (
 parsed AS (
   SELECT event.uri, event.cid, event.collection, event.actor_did, event.kind,
     event.reposted_post_uri, event.followed_project_uri, event.followed_did,
+    event.created_at AS record_created_at,
     CASE WHEN event.created_at ~ patterns.rfc3339
       AND event.created_at !~ '-00:00$'
       AND pg_input_is_valid(event.created_at, 'timestamptz')
@@ -281,6 +282,14 @@ parsed AS (
 timed AS (
   SELECT event.uri, event.cid, event.collection, event.actor_did, event.kind,
     event.reposted_post_uri, event.followed_project_uri, event.followed_did,
+    -- The record's own createdAt text, returned unchanged for the view and never
+    -- used for ordering. It is kept only when it parsed as a real timestamp above;
+    -- the length bound (an atproto datetime is at most 64 characters) keeps an
+    -- author-controlled value from inflating the page. The service re-checks the
+    -- exact atproto datetime format before exposing it.
+    CASE WHEN event.created_ts IS NOT NULL
+      AND length(event.record_created_at) <= 64
+      THEN event.record_created_at END AS record_created_at,
     COALESCE(
       CASE WHEN event.created_ts >= patterns.min_effective_at
         THEN event.created_ts END,
@@ -367,6 +376,7 @@ counts AS MATERIALIZED (
 )
 SELECT item.uri, item.cid, item.collection, item.actor_did, item.kind,
   item.reposted_post_uri, item.followed_project_uri, item.followed_did,
+  item.record_created_at,
   to_char(item.effective_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_value,
   CASE WHEN $7::boolean AND item.count_uri IS NOT NULL
     THEN COALESCE(counts.like_count, 0) END AS like_count,

@@ -25,6 +25,7 @@ const setup = () => {
   return { query, pages, service: new MaearthFeedService(pages) }
 }
 
+const recordCreatedAt = '2026-10-14T14:00:00.5+02:00'
 const recordCid = 'bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u'
 
 const repostRow = (overrides: Record<string, unknown> = {}) => ({
@@ -34,6 +35,8 @@ const repostRow = (overrides: Record<string, unknown> = {}) => ({
   actor_did: viewerDid,
   kind: 'repost',
   sort_value: '2026-10-14T12:00:00.123456Z',
+  // The record's own text, deliberately not the sort time's form: it must pass through unchanged.
+  record_created_at: recordCreatedAt,
   reposted_post_uri: `at://${viewerDid}/org.hypercerts.context.attachment/post`,
   followed_project_uri: null,
   followed_did: null,
@@ -244,7 +247,25 @@ describe('MaEarth feed query contract', () => {
     await expect(service.getFeed(request)).rejects.toThrow()
   })
 
-  it('returns each kind with only its own target and counts, and keeps both out of the skeleton', async () => {
+  it.each([
+    ['missing', null],
+    ['not a datetime', 'yesterday'],
+    // A timestamp, but the response format forbids the unknown-offset marker.
+    ['the unknown-offset form', '2026-10-14T12:00:00-00:00'],
+  ])(
+    'omits createdAt instead of failing the page when the record value is %s',
+    async (_label, value) => {
+      const { query, service } = setup()
+      query.mockResolvedValue({
+        rows: [repostRow({ record_created_at: value })],
+      })
+      const { feed } = await service.getFeed(request)
+      expect(feed).toHaveLength(1)
+      expect(feed[0]?.view).not.toHaveProperty('createdAt')
+    },
+  )
+
+  it("returns an actor on every kind and only each kind's own target and counts, and keeps them out of the skeleton", async () => {
     const { query, pages, service } = setup()
     const otherCid =
       'bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm'
@@ -266,7 +287,7 @@ describe('MaEarth feed query contract', () => {
     ]
     query.mockResolvedValue({ rows })
     const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
-    const createdAt = '2026-10-14T12:00:00.123456Z'
+    const createdAt = recordCreatedAt
     expect((await service.getFeed(request)).feed).toEqual([
       {
         subject: rows[0]?.uri,
@@ -275,8 +296,8 @@ describe('MaEarth feed query contract', () => {
           kind: 'projectFollow',
           createdAt,
           cid: recordCid,
-          actorDid: viewerDid,
-          followedProjectUri: followedProject,
+          actor: { did: viewerDid },
+          target: { uri: followedProject },
         },
       },
       {
@@ -286,8 +307,8 @@ describe('MaEarth feed query contract', () => {
           kind: 'accountFollow',
           createdAt,
           cid: otherCid,
-          actorDid: followedDid,
-          followedDid: viewerDid,
+          actor: { did: followedDid },
+          target: { did: viewerDid },
         },
       },
       {
@@ -297,8 +318,8 @@ describe('MaEarth feed query contract', () => {
           kind: 'repost',
           createdAt,
           cid: recordCid,
-          actorDid: viewerDid,
-          repostedPostUri: rows[2]?.reposted_post_uri,
+          actor: { did: viewerDid },
+          target: { uri: rows[2]?.reposted_post_uri },
           likeCount: 3,
           repostCount: 2,
           replyCount: 1,
@@ -311,7 +332,7 @@ describe('MaEarth feed query contract', () => {
           kind: 'post',
           createdAt,
           cid: recordCid,
-          actorDid: viewerDid,
+          actor: { did: viewerDid },
           likeCount: 3,
           repostCount: 2,
           replyCount: 1,

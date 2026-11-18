@@ -607,24 +607,45 @@ describe('MaEarth feed Lexicon contract', () => {
     })
   })
 
-  it('parses generated views and params, with every target optional, and rejects malformed ones', () => {
+  it('exposes the actor and target as named, open object defs', () => {
+    expect(valueAt(defs, 'maearthFeedView', 'required')).toEqual([
+      'kind',
+      'actor',
+    ])
+    expect(objectAt(defs, 'maearthFeedView', 'properties')).toMatchObject({
+      actor: { type: 'ref', ref: '#maearthActor' },
+      target: { type: 'ref', ref: '#maearthTarget' },
+    })
+    expect(valueAt(defs, 'maearthActor', 'required')).toEqual(['did'])
+    expect(objectAt(defs, 'maearthActor', 'properties')).toMatchObject({
+      did: { type: 'string', format: 'did' },
+    })
+    // Which target field is set depends on the kind, which this service enforces.
+    expect(valueAt(defs, 'maearthTarget', 'required')).toBeUndefined()
+    expect(objectAt(defs, 'maearthTarget', 'properties')).toMatchObject({
+      uri: { type: 'string', format: 'at-uri' },
+      did: { type: 'string', format: 'did' },
+    })
+  })
+
+  it('parses generated views and params, with the actor required and createdAt and target optional, and rejects malformed ones', () => {
     const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
     const base = {
       $type: viewType,
-      createdAt: '2026-10-14T12:00:00.123456Z',
+      // The record's own value, which need not be UTC.
+      createdAt: '2026-10-14T14:00:00.5+02:00',
       cid: 'bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u',
-      actorDid,
+      actor: { did: actorDid },
     }
     const postUri = `at://${actorDid}/org.hypercerts.context.attachment/3kpn`
     const projectUri = `at://${actorDid}/org.hypercerts.collection/3kpn`
     for (const valid of [
-      { kind: 'repost', repostedPostUri: postUri },
-      { kind: 'projectFollow', followedProjectUri: projectUri },
-      { kind: 'accountFollow', followedDid: actorDid },
-      // Older consumers and other kinds omit every target.
+      { kind: 'repost', target: { uri: postUri } },
+      { kind: 'projectFollow', target: { uri: projectUri } },
+      { kind: 'accountFollow', target: { did: actorDid } },
+      // The target is optional, and a post has none.
       { kind: 'projectFollow' },
       { kind: 'post' },
-      // Counts are optional, may be 0, and ride on any kind.
       { kind: 'post', likeCount: 0, repostCount: 12, replyCount: 3 },
     ]) {
       expect(maearthFeedView.schema.$parse({ ...base, ...valid })).toEqual({
@@ -632,33 +653,40 @@ describe('MaEarth feed Lexicon contract', () => {
         ...valid,
       })
     }
+    // actor is required; cid and createdAt are optional.
+    const { actor: _actor, ...withoutActor } = base
     expect(() =>
-      maearthFeedView.schema.$parse({ $type: viewType, kind: 'post' }),
+      maearthFeedView.schema.$parse({ ...withoutActor, kind: 'post' }),
     ).toThrow()
-    // cid and actorDid are optional.
-    for (const missing of ['cid', 'actorDid'] as const) {
+    for (const missing of ['cid', 'createdAt'] as const) {
       const { [missing]: _omitted, ...rest } = base
       expect(() =>
         maearthFeedView.schema.$parse({ ...rest, kind: 'post' }),
       ).not.toThrow()
     }
+    // The nested objects are open: fields added later (a handle, another target form) must not break parsing.
     expect(() =>
       maearthFeedView.schema.$parse({
-        $type: viewType,
-        createdAt: base.createdAt,
+        ...base,
+        kind: 'repost',
+        actor: { did: actorDid, handle: 'someone.example.com' },
+        target: { uri: postUri, cid: 'bafy', future: true },
+        somethingNew: 1,
       }),
-    ).toThrow()
+    ).not.toThrow()
     for (const invalid of [
       { kind: 'post', createdAt: '10000-01-01T00:00:00Z' },
+      { kind: 'post', createdAt: '2026-10-14T12:00:00' },
       { kind: 'post', cid: 'not-a-cid' },
-      { kind: 'post', actorDid: 'not-a-did' },
-      { kind: 'repost', repostedPostUri: 'not-an-at-uri' },
-      { kind: 'projectFollow', followedProjectUri: 'not-an-at-uri' },
-      { kind: 'projectFollow', followedProjectUri: 42 },
-      { kind: 'accountFollow', followedDid: 'not-a-did' },
+      { kind: 'post', actor: {} },
+      { kind: 'post', actor: { did: 'not-a-did' } },
+      { kind: 'post', actor: actorDid },
+      { kind: 'repost', target: { uri: 'not-an-at-uri' } },
+      { kind: 'projectFollow', target: { uri: 42 } },
+      { kind: 'accountFollow', target: { did: 'not-a-did' } },
       // The parser's 2048-character DID cap is why the SQL guards the follow subject length.
-      { kind: 'accountFollow', followedDid: `did:web:${'a'.repeat(2041)}` },
-      { kind: 'accountFollow', followedDid: projectUri },
+      { kind: 'accountFollow', target: { did: `did:web:${'a'.repeat(2041)}` } },
+      { kind: 'accountFollow', target: { did: projectUri } },
       { kind: 'post', likeCount: -1 },
       { kind: 'post', repostCount: 1.5 },
       { kind: 'post', replyCount: '3' },

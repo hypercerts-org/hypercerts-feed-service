@@ -25,46 +25,56 @@
         }
       }
     },
+    "maearthActor": {
+      "type": "object",
+      "required": ["did"],
+      "description": "The account that authored the item's own record: the poster, follower or reposter, which is the authority of the entry's subject URI. The object is open: clients must ignore fields they do not know, and later versions may add some (for example a handle).",
+      "properties": {
+        "did": { "type": "string", "format": "did" }
+      }
+    },
+    "maearthTarget": {
+      "type": "object",
+      "description": "What a repost or follow item points at. Exactly one field is set, by item kind: uri for a repost (the original attachment) and for a projectFollow (the followed org.hypercerts.collection); did for an accountFollow (the followed account). This service enforces that; the schema leaves both optional so new target shapes can be added. The target is not fetched. The object is open: clients must ignore fields they do not know.",
+      "properties": {
+        "uri": { "type": "string", "format": "at-uri" },
+        "did": { "type": "string", "format": "did" }
+      }
+    },
     "maearthFeedView": {
       "type": "object",
-      "required": ["kind", "createdAt"],
-      "description": "Experimental merge metadata, not hydrated content, plus engagement counts for post and repost items. createdAt is the effective SQL sort timestamp, including indexed_at fallback; items dated more than five minutes after the database's statement time are not returned. MaEarth must apply privacy and content filtering.",
+      "required": ["kind", "actor"],
+      "description": "Experimental merge metadata, not hydrated content, plus engagement counts for post and repost items. Items dated more than five minutes after the database's statement time are not returned. MaEarth must apply privacy and content filtering. Clients must ignore fields they do not know.",
       "properties": {
         "kind": {
           "type": "string",
           "maxLength": 64,
           "knownValues": ["post", "projectFollow", "accountFollow", "repost"]
         },
-        "createdAt": { "type": "string", "format": "datetime" },
+        "createdAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "The item record's own createdAt, returned exactly as the record wrote it (not reformatted or converted to UTC). Omitted when the record has no createdAt or its value is not a valid datetime; there is no substitute. It is not the sort time: items are ordered by createdAt or, when that is unusable, by the time the record was indexed, so an item without createdAt can still appear in order."
+        },
         "cid": {
           "type": "string",
           "format": "cid",
           "description": "CID of the item's own record, the entry's subject URI. Optional; this service sets it for every kind."
         },
-        "actorDid": {
-          "type": "string",
-          "format": "did",
-          "description": "DID of the item's record author (the poster, follower or reposter), which is the authority of the entry's subject URI. Optional; this service sets it for every kind."
+        "actor": {
+          "type": "ref",
+          "ref": "#maearthActor",
+          "description": "The item record's author. Set for every kind."
         },
-        "repostedPostUri": {
-          "type": "string",
-          "format": "at-uri",
-          "description": "Original attachment URI. Present only for reposts; the target is not fetched."
-        },
-        "followedProjectUri": {
-          "type": "string",
-          "format": "at-uri",
-          "description": "The followed project's org.hypercerts.collection URI. Present only for projectFollow; the follower is the authority of the entry's subject URI."
-        },
-        "followedDid": {
-          "type": "string",
-          "format": "did",
-          "description": "The followed account's DID, from the follow record's subject. Present only for accountFollow; the follower is the authority of the entry's subject URI."
+        "target": {
+          "type": "ref",
+          "ref": "#maearthTarget",
+          "description": "What a repost or follow item points at. Present for repost, projectFollow and accountFollow; absent for post."
         },
         "likeCount": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of distinct accounts with a current like of the counted post. Present, possibly 0, only for post and repost items. A repost item counts its original post (repostedPostUri), not the repost record. A current count at response time, not a snapshot."
+          "description": "Number of distinct accounts with a current like of the counted post. Present, possibly 0, only for post and repost items. A repost item counts its original post (target.uri), not the repost record. A current count at response time, not a snapshot."
         },
         "repostCount": {
           "type": "integer",

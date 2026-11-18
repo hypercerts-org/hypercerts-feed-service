@@ -176,13 +176,18 @@ const subjects = async (
 interface CollectedItem {
   readonly subject: string
   readonly kind: string
-  readonly createdAt: string
+  /** The effective sort timestamp, which getFeed views do not expose. */
+  readonly sortValue: string
 }
 
 const minutesFromNow = (minutes: number) =>
   new Date(Date.now() + minutes * 60_000).toISOString()
 
-/** Follows cursors to the end; the cap turns a non-terminating cursor into a failure. */
+/**
+ * Follows cursors to the end through the registry's page boundary, which still
+ * carries each row's sort value (views expose the record's own createdAt
+ * instead). The cap turns a non-terminating cursor into a failure.
+ */
 const collect = async (
   viewerDid: string,
   extra: Parameters<typeof request>[1],
@@ -191,17 +196,18 @@ const collect = async (
   const items: CollectedItem[] = []
   let cursor: string | undefined
   for (let pageCount = 0; pageCount < maxPages; pageCount++) {
-    const page = await service.getFeed(
+    const page = await registry.loadPage(
       request(viewerDid, {
         ...extra,
         ...(cursor === undefined ? {} : { cursor }),
       }),
+      'metadata',
     )
     items.push(
-      ...page.feed.map(({ subject, view }) => ({
-        subject,
-        kind: view.kind,
-        createdAt: view.createdAt,
+      ...page.rows.map(({ uri, kind, sortValue }) => ({
+        subject: uri,
+        kind,
+        sortValue,
       })),
     )
     cursor = page.cursor
@@ -274,7 +280,8 @@ describe('MaEarth Following SQL', () => {
     const page = await service.getFeed(
       request(viewer, { kinds: ['accountFollow', 'projectFollow'] }),
     )
-    const createdAt = '2026-10-14T12:00:00.000000Z'
+    // The record's own createdAt, as seeded (not the sort time's microsecond form).
+    const createdAt = '2026-10-14T12:00:00Z'
     const account = (subject: string, followedDid: string) => ({
       subject,
       view: {
@@ -282,8 +289,8 @@ describe('MaEarth Following SQL', () => {
         kind: 'accountFollow',
         createdAt,
         cid,
-        actorDid: authorOf(subject),
-        followedDid,
+        actor: { did: authorOf(subject) },
+        target: { did: followedDid },
       },
     })
     const entity = (subject: string, followedProjectUri: string) => ({
@@ -293,8 +300,8 @@ describe('MaEarth Following SQL', () => {
         kind: 'projectFollow',
         createdAt,
         cid,
-        actorDid: authorOf(subject),
-        followedProjectUri,
+        actor: { did: authorOf(subject) },
+        target: { uri: followedProjectUri },
       },
     })
     const bySubject = (left: { subject: string }, right: { subject: string }) =>
@@ -333,10 +340,10 @@ describe('MaEarth Following SQL', () => {
         view: {
           $type: 'org.hypercerts.feed.defs#maearthFeedView',
           kind: 'repost',
-          createdAt: '2026-10-14T12:00:00.000000Z',
+          createdAt: '2026-10-14T12:00:00Z',
           cid,
-          actorDid: author,
-          repostedPostUri: target,
+          actor: { did: author },
+          target: { uri: target },
           likeCount: 0,
           // Distinct reposters: author (three records, CID ignored), stranger, viewer.
           repostCount: 3,
@@ -407,18 +414,15 @@ describe('MaEarth Following SQL', () => {
       'UPDATE happyview_records SET record = $1 WHERE uri = $2',
       ['{invalid', malformed],
     )
-    const seen = (await collect(viewer, { kinds: ['post'], limit: 1 })).map(
-      (item) => item.subject,
-    )
-    expect(seen).toEqual([
+    const items = await collect(viewer, { kinds: ['post'], limit: 1 })
+    expect(items.map((item) => item.subject)).toEqual([
       ...[valid, tie].sort().reverse(),
       fallback,
       impossible,
     ])
-    const first = await service.getFeed(
-      request(viewer, { kinds: ['post'], limit: 1 }),
-    )
-    expect(first.feed[0]?.view.createdAt).toBe('2026-10-14T12:00:00.123456Z')
+    // Both tied rows share one instant, kept to the microsecond.
+    expect(items[0]?.sortValue).toBe('2026-10-14T12:00:00.123456Z')
+    expect(items[1]?.sortValue).toBe('2026-10-14T12:00:00.123456Z')
   })
 
   it('does not truncate a graph with more than 500 accounts', async () => {
@@ -780,7 +784,7 @@ describe('MaEarth record shape and filters', () => {
       'accountFollow',
       'projectFollow',
     ])
-    expect(all.map((item) => item.createdAt)).toEqual([
+    expect(all.map((item) => item.sortValue)).toEqual([
       '2026-10-14T12:05:00.000000Z',
       '2026-10-14T12:04:00.000000Z',
       '2026-10-14T12:03:00.000000Z',
@@ -852,7 +856,7 @@ describe('MaEarth effective timestamp range', () => {
 
     const items = await collect(viewer, { kinds: ['post'], limit: 1 })
     expect(items.map((item) => item.subject)).toEqual([earlyOffset, ...edgeMin])
-    expect(items.map((item) => item.createdAt)).toEqual([
+    expect(items.map((item) => item.sortValue)).toEqual([
       '2026-10-14T11:00:00.000000Z',
       '0001-01-01T00:00:00.000000Z',
       '0001-01-01T00:00:00.000000Z',
@@ -942,6 +946,48 @@ describe('MaEarth future-dated items', () => {
     expect(await subjects(viewer)).toEqual(
       [viewerFollow, viewerProject, visible].sort(),
     )
+  })
+})
+
+describe('MaEarth view createdAt', () => {
+  it("returns the record's own createdAt unchanged, omits an unusable one, and leaves the sort time alone", async () => {
+    const viewer = did(),
+      author = did()
+    await follow(viewer, author)
+    // Not UTC and not microsecond-normalized: the view must repeat it as written.
+    const ownCreatedAt = '2026-10-14T14:00:00.123456+02:00'
+    const offset = await update(author, { createdAt: ownCreatedAt })
+    // An impossible date that the atproto datetime check alone would let through, and the
+    // unknown-offset form: each sorts by indexed_at and has no createdAt to show.
+    const impossible = await update(
+      author,
+      { createdAt: '2026-02-30T12:00:00Z' },
+      { indexedAt: '2026-10-14 11:00:00+00' },
+    )
+    const unknownOffset = await update(
+      author,
+      { createdAt: '2026-10-14T10:30:00-00:00' },
+      { indexedAt: '2026-10-14 10:00:00+00' },
+    )
+
+    const { feed } = await service.getFeed(request(viewer, { kinds: ['post'] }))
+    expect(feed.map((item) => item.subject)).toEqual([
+      offset,
+      impossible,
+      unknownOffset,
+    ])
+    expect(feed[0]?.view.createdAt).toBe(ownCreatedAt)
+    expect(feed[1]?.view).not.toHaveProperty('createdAt')
+    expect(feed[2]?.view).not.toHaveProperty('createdAt')
+    expect(
+      (await collect(viewer, { kinds: ['post'] })).map(
+        (item) => item.sortValue,
+      ),
+    ).toEqual([
+      '2026-10-14T12:00:00.123456Z',
+      '2026-10-14T11:00:00.000000Z',
+      '2026-10-14T10:00:00.000000Z',
+    ])
   })
 })
 
