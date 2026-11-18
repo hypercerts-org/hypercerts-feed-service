@@ -61,7 +61,7 @@ const sourceRow = (
   cid,
   actorDid: authorDid,
   collection: 'org.hypercerts.claim.activity',
-  kind: 'cert.create',
+  kind: 'cert',
   sortValue: '2026-07-20T00:00:03.000000Z',
   sourceValue: {
     $type: 'org.hypercerts.claim.activity',
@@ -150,7 +150,7 @@ const populatedPage = (): InternalFeedPage<InternalSourceFeedRow> => ({
       uri: invalidUri,
       actorDid: invalidAuthorDid,
       collection: 'org.hypercerts.collection',
-      kind: 'collection.create',
+      kind: 'collection',
       sortValue: '2026-07-20T00:00:02.000000Z',
       sourceValue: {
         $type: 'org.hypercerts.collection',
@@ -160,7 +160,7 @@ const populatedPage = (): InternalFeedPage<InternalSourceFeedRow> => ({
     sourceRow({
       uri: endorsementUri,
       collection: 'app.certified.badge.award',
-      kind: 'endorsement.award',
+      kind: 'endorsement',
       sortValue: '2026-07-20T00:00:01.000000Z',
       sourceValue: {
         $type: 'app.certified.badge.award',
@@ -192,52 +192,47 @@ describe('HydratedFeedService', () => {
     expect(pages.calls).toEqual([{ input, mode: 'with-source' }])
     expect(identities.calls).toEqual([[authorDid, endorsedDid]])
     expect(output.cursor).toBe(cursor)
-    expect(output.feed.map((item) => item.subject)).toEqual([
+    expect(output.feed.map((item) => item.uri)).toEqual([
       activityUri,
       endorsementUri,
     ])
     expect(output.feed[0]).toEqual({
-      subject: activityUri,
-      view: {
-        $type: 'org.hypercerts.feed.defs#hypercertsFeedView',
-        kind: 'cert.create',
-        actor: {
-          did: authorDid,
-          displayName: 'Certified Author',
-        },
-        content: {
-          $type: 'org.hypercerts.feed.defs#activityView',
-          title: 'Restore the watershed',
-          shortDescription: 'Native forest restoration',
-          createdAt,
-          locationCount: 0,
-        },
+      uri: activityUri,
+      cid,
+      author: { did: authorDid, displayName: 'Certified Author' },
+      kind: 'cert',
+      // The value the page was ordered by, which the cursor encodes.
+      sortAt: '2026-07-20T00:00:03.000000Z',
+      createdAt,
+      content: {
+        $type: 'org.hypercerts.feed.defs#activityView',
+        title: 'Restore the watershed',
+        shortDescription: 'Native forest restoration',
+        locationCount: 0,
       },
     })
-    expect(output.feed[1]).toMatchObject({
-      subject: endorsementUri,
-      view: {
-        $type: 'org.hypercerts.feed.defs#hypercertsFeedView',
-        actor: { did: authorDid },
-        content: {
-          $type: 'org.hypercerts.feed.defs#endorsementView',
-          subject: { did: endorsedDid },
-        },
+    expect(output.feed[1]).toEqual({
+      uri: endorsementUri,
+      cid,
+      author: { did: authorDid, displayName: 'Certified Author' },
+      kind: 'endorsement',
+      sortAt: '2026-07-20T00:00:01.000000Z',
+      createdAt,
+      subject: {
+        $type: 'org.hypercerts.feed.defs#actorView',
+        did: endorsedDid,
       },
     })
 
     for (const item of output.feed) {
       expect(item).not.toHaveProperty('$type')
-      expect(item).not.toHaveProperty('id')
-      expect(item).not.toHaveProperty('feedTimestamp')
+      expect(item).not.toHaveProperty('view')
       expect(item).not.toHaveProperty('record')
-      expect(item).not.toHaveProperty('recordState')
       expect(item).not.toHaveProperty('actorDid')
-      expect(item.view.actor).not.toHaveProperty('profileSource')
     }
   })
 
-  it('returns target references without discovering or reading target identities', async () => {
+  it('lists measured records as references without discovering or reading their identities', async () => {
     const authorContext = allContexts().get(authorDid)
     if (authorContext === undefined) throw new Error('missing author fixture')
     const pages = new FakePages({
@@ -245,7 +240,7 @@ describe('HydratedFeedService', () => {
         sourceRow({
           uri: measurementUri,
           collection: 'org.hypercerts.context.measurement',
-          kind: 'measurement.create',
+          kind: 'measurement',
           sourceValue: {
             $type: 'org.hypercerts.context.measurement',
             metric: 'hectares restored',
@@ -270,11 +265,9 @@ describe('HydratedFeedService', () => {
 
     expect(identities.calls).toEqual([[authorDid]])
     expect(output.feed[0]).toMatchObject({
-      view: {
-        content: {
-          $type: 'org.hypercerts.feed.defs#measurementView',
-          target: { uri: targetUri, cid },
-        },
+      content: {
+        $type: 'org.hypercerts.feed.defs#measurementView',
+        subjects: [{ uri: targetUri, cid }],
       },
     })
   })
@@ -286,7 +279,7 @@ describe('HydratedFeedService', () => {
           uri: invalidUri,
           actorDid: invalidAuthorDid,
           collection: 'org.hypercerts.collection',
-          kind: 'collection.create',
+          kind: 'collection',
           sourceValue: {
             $type: 'org.hypercerts.collection',
             createdAt,
