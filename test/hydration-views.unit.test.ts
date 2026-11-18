@@ -8,7 +8,11 @@ import {
   validateFeedRecord,
   type ValidatedFeedRecord,
 } from '../src/hydration/validation.js'
-import { buildItemContent, buildItemSubject } from '../src/hydration/views.js'
+import {
+  buildEndorsedSubject,
+  buildItemContent,
+  buildRecordSubject,
+} from '../src/hydration/views.js'
 
 const actorDid = 'did:plc:abcdefghijklmnopqrstuvwx'
 const subjectDid = 'did:plc:zyxwvutsrqponmlkjihgfedc'
@@ -464,16 +468,16 @@ describe('feed-card view builders', () => {
       records.endorsement,
     )
 
-    expect(buildItemSubject(record, { endorsedActor })).toEqual({
+    expect(buildEndorsedSubject(record, { endorsedActor })).toEqual({
       $type: 'org.hypercerts.feed.defs#actorView',
       ...endorsedActor,
     })
     expect(buildItemContent(record)).toBeUndefined()
     const mismatch =
       'Endorsement subject failed because the endorsed account could not be matched to its discovered identity; verify endorsement DID discovery and identity mapping before serving hydrated pages.'
-    expect(() => buildItemSubject(record)).toThrow(mismatch)
+    expect(() => buildEndorsedSubject(record)).toThrow(mismatch)
     expect(() =>
-      buildItemSubject(record, {
+      buildEndorsedSubject(record, {
         endorsedActor: { ...endorsedActor, did: actorDid },
       }),
     ).toThrow(mismatch)
@@ -497,7 +501,7 @@ describe('feed-card view builders', () => {
         subjects: [strongRef(), strongRef(`${targetUri}-2`, secondCid)],
       },
     )
-    expect(buildItemSubject(evaluation)).toEqual({
+    expect(buildRecordSubject(evaluation)).toEqual({
       $type: 'org.hypercerts.feed.defs#recordView',
       uri: targetUri,
       cid,
@@ -515,7 +519,8 @@ describe('feed-card view builders', () => {
       ],
     })
     // A measurement lists its subjects in content; only a single-subject record has an item subject.
-    expect(buildItemSubject(measurement)).toBeUndefined()
+    expect(buildRecordSubject(measurement)).toBeUndefined()
+    expect(buildEndorsedSubject(measurement)).toBeUndefined()
   })
 
   it('selects the first image blob for updates, ignores URIs and non-images, and lists every subject', () => {

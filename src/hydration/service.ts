@@ -1,3 +1,5 @@
+import { isDatetimeString } from '@atproto/syntax'
+
 import type { FeedPageLoader, InternalSourceFeedRow } from '../feed/registry.js'
 import { FEED_KINDS, type GetFeedSkeletonInput } from '../feed/types.js'
 import type {
@@ -13,7 +15,13 @@ import {
   validateFeedRecord,
   type ValidatedFeedRecord,
 } from './validation.js'
-import { buildActorView, buildItemContent, buildItemSubject } from './views.js'
+import { itemView } from '../lexicons/org/hypercerts/feed/defs.js'
+import {
+  buildActorView,
+  buildEndorsedSubject,
+  buildItemContent,
+  buildRecordSubject,
+} from './views.js'
 
 const identityInvariantError = (): Error =>
   new Error(
@@ -37,10 +45,36 @@ const requireActorView = (
   return buildActorView(did, validateCertifiedProfile(context.certifiedProfile))
 }
 
+/** Every item field that needs no identity lookup. */
+type IdentityFreeItem = Omit<ItemView, 'author'>
+
 interface ValidatedFeedRow {
   readonly row: InternalSourceFeedRow
   readonly record: ValidatedFeedRecord
   readonly endorsedDid: string | undefined
+  readonly item: IdentityFreeItem
+}
+
+/**
+ * The record's own `createdAt` is omitted when the output format rejects it:
+ * the record validator accepts lenient values such as one without a zone.
+ */
+const buildIdentityFreeItem = (
+  row: InternalSourceFeedRow,
+  record: ValidatedFeedRecord,
+): IdentityFreeItem => {
+  const createdAt = record.value.createdAt
+  const subject = buildRecordSubject(record)
+  const content = buildItemContent(record)
+  return {
+    uri: row.uri,
+    cid: row.cid,
+    kind: record.kind,
+    sortAt: row.sortValue,
+    ...(isDatetimeString(createdAt) ? { createdAt } : {}),
+    ...(subject === undefined ? {} : { subject }),
+    ...(content === undefined ? {} : { content }),
+  }
 }
 
 interface ValidatedFeedBatch {
@@ -60,8 +94,17 @@ const collectValidatedFeedRows = (
     const record = validateFeedRecord(kind, row.collection, row.sourceValue)
     if (record === undefined) continue
 
+    // The record validator accepts values the output format rejects (a zone-less
+    // startDate, a `..` record key in a reference). One such value would fail the
+    // whole page, so a record whose item does not match the Lexicon is an invalid
+    // source. Identity is not known yet, so the author is the row's DID alone.
+    const item = buildIdentityFreeItem(row, record)
+    if (!itemView.schema.$matches({ ...item, author: { did: row.actorDid } })) {
+      continue
+    }
+
     const endorsedDid = getEndorsedActorDid(record)
-    validatedRows.push({ row, record, endorsedDid })
+    validatedRows.push({ row, record, endorsedDid, item })
     requestedDids.add(row.actorDid)
     if (endorsedDid !== undefined) requestedDids.add(endorsedDid)
   }
@@ -73,28 +116,18 @@ const buildItems = (
   validatedRows: readonly ValidatedFeedRow[],
   views: ReadonlyMap<string, ActorView>,
 ): ItemView[] =>
-  validatedRows.map(({ row, record, endorsedDid }) => {
+  validatedRows.map(({ row, record, endorsedDid, item }) => {
     const author = views.get(row.actorDid)
     if (author?.did !== row.actorDid) {
       throw identityInvariantError()
     }
     const endorsedActor =
       endorsedDid === undefined ? undefined : views.get(endorsedDid)
-    const subject = buildItemSubject(record, {
+    const subject = buildEndorsedSubject(record, {
       ...(endorsedActor === undefined ? {} : { endorsedActor }),
     })
-    const content = buildItemContent(record)
 
-    return {
-      uri: row.uri,
-      cid: row.cid,
-      author,
-      kind: record.kind,
-      sortAt: row.sortValue,
-      createdAt: record.value.createdAt,
-      ...(subject === undefined ? {} : { subject }),
-      ...(content === undefined ? {} : { content }),
-    }
+    return { ...item, author, ...(subject === undefined ? {} : { subject }) }
   })
 
 const buildOutput = (

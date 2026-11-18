@@ -1,14 +1,15 @@
 import type {
   ActivityFeedView,
   ActorImageReference,
+  ActorSubject,
   ActorView,
   CollectionFeedView,
   CollectionImageReference,
   EvaluationFeedView,
   ItemContent,
-  ItemSubject,
   LargeImageReference,
   MeasurementFeedView,
+  RecordSubject,
   RecordView,
   SmallBlobImageReference,
   UpdateFeedView,
@@ -207,41 +208,36 @@ export const buildItemContent = (
 }
 
 /**
- * Builds what the record's own single `subject` points at: the evaluated record
- * for an evaluation, the hydrated endorsed account for an endorsement. Other
- * kinds have no single subject field (measurements and updates list theirs in
- * content).
+ * Builds the subject that points at a record: the evaluated record of an
+ * evaluation, from the record's own `subject` field. Needs no identity lookup.
+ * A measurement or update lists its records in `content.subjects` instead.
  */
-export const buildItemSubject = (
+export const buildRecordSubject = (
+  record: ValidatedFeedRecord,
+): RecordSubject | undefined =>
+  record.kind === 'evaluation' && record.value.subject !== undefined
+    ? {
+        $type: 'org.hypercerts.feed.defs#recordView',
+        ...recordReference(record.value.subject),
+      }
+    : undefined
+
+/**
+ * Builds the subject that points at an account: the hydrated endorsed account
+ * of an endorsement. Other kinds have none. It must be given the endorsed
+ * account's discovered identity, which is why it runs after the identity batch.
+ */
+export const buildEndorsedSubject = (
   record: ValidatedFeedRecord,
   context: FeedViewContext = {},
-): ItemSubject | undefined => {
-  switch (record.kind) {
-    case 'evaluation':
-      return record.value.subject === undefined
-        ? undefined
-        : {
-            $type: 'org.hypercerts.feed.defs#recordView',
-            ...recordReference(record.value.subject),
-          }
-    case 'endorsement': {
-      const subjectDid = getEndorsedActorDid(record)
-      if (
-        subjectDid === undefined ||
-        context.endorsedActor?.did !== subjectDid
-      ) {
-        throw endorsementSubjectInvariantError()
-      }
-      return {
-        $type: 'org.hypercerts.feed.defs#actorView',
-        ...context.endorsedActor,
-      }
-    }
-    case 'cert':
-    case 'collection':
-    case 'project-with-cert':
-    case 'measurement':
-    case 'update':
-      return undefined
+): ActorSubject | undefined => {
+  if (record.kind !== 'endorsement') return undefined
+  const subjectDid = getEndorsedActorDid(record)
+  if (subjectDid === undefined || context.endorsedActor?.did !== subjectDid) {
+    throw endorsementSubjectInvariantError()
+  }
+  return {
+    $type: 'org.hypercerts.feed.defs#actorView',
+    ...context.endorsedActor,
   }
 }

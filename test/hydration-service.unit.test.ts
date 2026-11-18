@@ -356,6 +356,39 @@ describe('HydratedFeedService', () => {
     expect(() => $output.schema.$parse(output)).not.toThrow()
   })
 
+  it('omits a createdAt the output format rejects, and drops a record whose startDate it rejects', async () => {
+    const activity = {
+      $type: 'org.hypercerts.claim.activity',
+      title: 'Restore the watershed',
+      shortDescription: 'Native forest restoration',
+      createdAt,
+    }
+    // The record validator accepts a datetime without a zone and a 24:00 time; the output format does not.
+    const noZone = '2026-07-21T10:00:00'
+    const pages = new FakePages({
+      rows: [
+        sourceRow({ sourceValue: { ...activity, createdAt: noZone } }),
+        sourceRow({
+          uri: invalidUri,
+          actorDid: invalidAuthorDid,
+          sourceValue: { ...activity, startDate: '2026-07-20T24:00:00Z' },
+        }),
+      ],
+      cursor,
+    })
+    const identities = new FakeIdentities(allContexts())
+
+    const output = await new HydratedFeedService(pages, identities).getFeed(
+      feedRequest(),
+    )
+
+    expect(output.feed.map((item) => item.uri)).toEqual([activityUri])
+    expect(output.feed[0]).not.toHaveProperty('createdAt')
+    expect(output.cursor).toBe(cursor)
+    expect(identities.calls).toEqual([[authorDid]])
+    expect(() => $output.schema.$parse(output)).not.toThrow()
+  })
+
   it('skips identity retrieval for an empty page and preserves its cursor bytes', async () => {
     const pages = new FakePages({ rows: [], cursor })
     const identities = new FakeIdentities(new Map())
