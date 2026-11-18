@@ -11,8 +11,16 @@
       "type": "object",
       "description": "Viewer-scoped Following parameters. Anonymous requests require viewerDid; service-auth requests use the verified issuer. actorDid only narrows this scope.",
       "properties": {
-        "viewerDid": { "type": "string", "format": "did", "maxLength": 256 },
-        "actorDid": { "type": "string", "format": "did", "maxLength": 256 },
+        "viewerDid": {
+          "type": "string",
+          "format": "did",
+          "maxLength": 256
+        },
+        "actorDid": {
+          "type": "string",
+          "format": "did",
+          "maxLength": 256
+        },
         "kinds": {
           "type": "array",
           "maxLength": 32,
@@ -20,71 +28,13 @@
           "items": {
             "type": "string",
             "maxLength": 64,
-            "knownValues": ["post", "projectFollow", "accountFollow", "repost"]
+            "knownValues": [
+              "update",
+              "repost",
+              "project-follow",
+              "account-follow"
+            ]
           }
-        }
-      }
-    },
-    "maearthActor": {
-      "type": "object",
-      "required": ["did"],
-      "description": "The account that authored the item's own record: the poster, follower or reposter, which is the authority of the entry's subject URI. The object is open: clients must ignore fields they do not know, and later versions may add some (for example a handle).",
-      "properties": {
-        "did": { "type": "string", "format": "did" }
-      }
-    },
-    "maearthTarget": {
-      "type": "object",
-      "description": "What a repost or follow item points at. Exactly one field is set, by item kind: uri for a repost (the original attachment) and for a projectFollow (the followed org.hypercerts.collection); did for an accountFollow (the followed account). This service enforces that; the schema leaves both optional so new target shapes can be added. The target is not fetched. The object is open: clients must ignore fields they do not know.",
-      "properties": {
-        "uri": { "type": "string", "format": "at-uri" },
-        "did": { "type": "string", "format": "did" }
-      }
-    },
-    "maearthFeedView": {
-      "type": "object",
-      "required": ["kind", "actor"],
-      "description": "Experimental merge metadata, not hydrated content, plus engagement counts for post and repost items. Items dated more than five minutes after the database's statement time are not returned. MaEarth must apply privacy and content filtering. Clients must ignore fields they do not know.",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "maxLength": 64,
-          "knownValues": ["post", "projectFollow", "accountFollow", "repost"]
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "datetime",
-          "description": "The item record's own createdAt, returned exactly as the record wrote it (not reformatted or converted to UTC). Omitted when the record has no createdAt or its value is not a valid datetime; there is no substitute. It is not the sort time: items are ordered by createdAt or, when that is unusable, by the time the record was indexed, so an item without createdAt can still appear in order."
-        },
-        "cid": {
-          "type": "string",
-          "format": "cid",
-          "description": "CID of the item's own record, the entry's subject URI. Optional; this service sets it for every kind."
-        },
-        "actor": {
-          "type": "ref",
-          "ref": "#maearthActor",
-          "description": "The item record's author. Set for every kind."
-        },
-        "target": {
-          "type": "ref",
-          "ref": "#maearthTarget",
-          "description": "What a repost or follow item points at. Present for repost, projectFollow and accountFollow; absent for post."
-        },
-        "likeCount": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Number of distinct accounts with a current like of the counted post. Present, possibly 0, only for post and repost items. A repost item counts its original post (target.uri), not the repost record. A current count at response time, not a snapshot."
-        },
-        "repostCount": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Number of distinct accounts with a current repost of the counted post. Present, possibly 0, only for post and repost items; counted post as for likeCount."
-        },
-        "replyCount": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Number of current direct replies to the counted post: comment attachments listing it in subjects. Every comment record counts, not distinct authors, and replies to replies are excluded. Present, possibly 0, only for post and repost items; counted post as for likeCount."
         }
       }
     },
@@ -106,7 +56,11 @@
           "type": "array",
           "maxLength": 128,
           "description": "Evaluator DIDs whose active endorsement subjects extend the author scope.",
-          "items": { "type": "string", "format": "did", "maxLength": 256 }
+          "items": {
+            "type": "string",
+            "format": "did",
+            "maxLength": 256
+          }
         },
         "organizationQuality": {
           "type": "ref",
@@ -120,13 +74,13 @@
             "type": "string",
             "maxLength": 64,
             "knownValues": [
-              "cert.create",
-              "collection.create",
-              "project.created_with_cert",
-              "evaluation.create",
-              "measurement.create",
-              "update.create",
-              "endorsement.award"
+              "cert",
+              "collection",
+              "project-with-cert",
+              "evaluation",
+              "measurement",
+              "endorsement",
+              "update"
             ]
           }
         }
@@ -153,11 +107,27 @@
         }
       }
     },
-    "actorSummary": {
+    "skeletonItem": {
       "type": "object",
-      "description": "A feed actor's DID and, when meaningful, validated Certified-profile display fields.",
+      "required": ["uri"],
+      "description": "One record selected for the feed, as an unhydrated reference. The caller hydrates it. Nothing else about the record is returned. Clients must ignore fields they do not know.",
       "properties": {
-        "did": { "type": "string", "format": "did" },
+        "uri": {
+          "type": "string",
+          "format": "at-uri",
+          "description": "AT-URI of the record selected for the feed: the item's own record."
+        }
+      }
+    },
+    "actorView": {
+      "type": "object",
+      "required": ["did"],
+      "description": "An account. In the Hypercerts feed it carries the account's validated Certified-profile display fields when the profile is meaningful; in the MaEarth feed it is the DID alone. Clients must ignore fields they do not know; later versions may add some (for example a handle).",
+      "properties": {
+        "did": {
+          "type": "string",
+          "format": "did"
+        },
         "displayName": {
           "type": "string",
           "maxLength": 640,
@@ -169,29 +139,79 @@
         }
       }
     },
+    "recordView": {
+      "type": "object",
+      "required": ["uri"],
+      "description": "A reference to a record. It resembles com.atproto.repo.strongRef, but cid is optional because some source records, such as a project follow's subject, carry no CID. The record is not fetched. When counts are present they count this uri. Clients must ignore fields they do not know.",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "format": "at-uri"
+        },
+        "cid": {
+          "type": "string",
+          "format": "cid",
+          "description": "CID of the referenced record version, when the source record names one."
+        },
+        "likeCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct accounts with a current like of this uri. A current count at response time, not a snapshot. Set only where the feed documents it."
+        },
+        "repostCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct accounts with a current repost of this uri. Same rules as likeCount."
+        },
+        "replyCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of current direct replies to this uri: comment attachments listing it in subjects. Every comment record counts, not distinct authors, and replies to replies are excluded. Same rules as likeCount."
+        }
+      }
+    },
     "activityView": {
       "type": "object",
       "required": ["title"],
       "properties": {
-        "title": { "type": "string" },
-        "shortDescription": { "type": "string" },
+        "title": {
+          "type": "string"
+        },
+        "shortDescription": {
+          "type": "string"
+        },
         "image": {
           "type": "union",
           "refs": ["org.hypercerts.defs#uri", "org.hypercerts.defs#smallImage"]
         },
-        "createdAt": { "type": "string", "format": "datetime" },
-        "startDate": { "type": "string", "format": "datetime" },
-        "endDate": { "type": "string", "format": "datetime" },
-        "locationCount": { "type": "integer", "minimum": 0 }
-      }
+        "startDate": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "endDate": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "locationCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "description": "Card fields of a Hypercerts activity record."
     },
     "collectionView": {
       "type": "object",
       "required": ["title"],
       "properties": {
-        "collectionType": { "type": "string" },
-        "title": { "type": "string" },
-        "shortDescription": { "type": "string" },
+        "collectionType": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "shortDescription": {
+          "type": "string"
+        },
         "image": {
           "type": "union",
           "refs": [
@@ -200,79 +220,144 @@
             "org.hypercerts.defs#largeImage"
           ]
         },
-        "createdAt": { "type": "string", "format": "datetime" },
-        "itemCount": { "type": "integer", "minimum": 0 }
-      }
-    },
-    "endorsementView": {
-      "type": "object",
-      "required": ["subject"],
-      "properties": {
-        "subject": { "type": "ref", "ref": "#actorSummary" },
-        "createdAt": { "type": "string", "format": "datetime" }
-      }
+        "itemCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "description": "Card fields of a Hypercerts collection record; used for both the collection and project-with-cert kinds."
     },
     "evaluationView": {
       "type": "object",
       "properties": {
-        "summary": { "type": "string" },
-        "createdAt": { "type": "string", "format": "datetime" },
-        "target": { "type": "ref", "ref": "com.atproto.repo.strongRef" }
-      }
+        "summary": {
+          "type": "string"
+        }
+      },
+      "description": "Card fields of an evaluation record. The evaluated record is the item's subject."
     },
     "measurementView": {
       "type": "object",
       "properties": {
-        "metric": { "type": "string" },
-        "createdAt": { "type": "string", "format": "datetime" },
-        "target": { "type": "ref", "ref": "com.atproto.repo.strongRef" }
-      }
+        "metric": {
+          "type": "string"
+        },
+        "subjects": {
+          "type": "array",
+          "maxLength": 100,
+          "description": "Every record the measurement is about, in the record's order. Each entry is the record's strong reference (uri and cid); the records are not fetched.",
+          "items": {
+            "type": "ref",
+            "ref": "#recordView"
+          }
+        }
+      },
+      "description": "Card fields of a measurement record."
     },
     "updateView": {
       "type": "object",
       "properties": {
-        "title": { "type": "string" },
-        "shortDescription": { "type": "string" },
+        "title": {
+          "type": "string"
+        },
+        "shortDescription": {
+          "type": "string"
+        },
         "image": {
           "type": "union",
           "refs": ["org.hypercerts.defs#uri", "org.hypercerts.defs#smallBlob"]
         },
-        "createdAt": { "type": "string", "format": "datetime" },
-        "target": { "type": "ref", "ref": "com.atproto.repo.strongRef" }
-      }
+        "subjects": {
+          "type": "array",
+          "maxLength": 100,
+          "description": "Every record the update is about, in the record's order. Each entry is the record's strong reference (uri and cid); the records are not fetched.",
+          "items": {
+            "type": "ref",
+            "ref": "#recordView"
+          }
+        }
+      },
+      "description": "Card fields of an update (attachment) record."
     },
-    "hypercertsFeedView": {
+    "itemView": {
       "type": "object",
-      "required": ["kind", "actor", "content"],
-      "description": "Hydrated representation of one entry from the Hypercerts viewer-scope feed.",
+      "required": ["uri", "author", "kind", "sortAt"],
+      "description": "One record selected for the feed, flat: the record's own identity, author, kind and feed time, what it points at, and optional counts and card content. Each fact appears once. Required fields are only the ones every feed sets. The object is open: clients must ignore fields they do not know, and both unions are open, so clients must tolerate $type values they do not know.",
       "properties": {
+        "uri": {
+          "type": "string",
+          "format": "at-uri",
+          "description": "AT-URI of the item's own record. Its authority is author.did."
+        },
+        "cid": {
+          "type": "string",
+          "format": "cid",
+          "description": "CID of the item's own record version. This service sets it for every kind."
+        },
+        "author": {
+          "type": "ref",
+          "ref": "#actorView",
+          "description": "The account that wrote the item's own record: the poster, follower, reposter, evaluator and so on. Not the account the record points at; that is subject."
+        },
         "kind": {
           "type": "string",
           "maxLength": 64,
           "knownValues": [
-            "cert.create",
-            "collection.create",
-            "project.created_with_cert",
-            "evaluation.create",
-            "measurement.create",
-            "update.create",
-            "endorsement.award"
+            "cert",
+            "collection",
+            "project-with-cert",
+            "evaluation",
+            "measurement",
+            "endorsement",
+            "update",
+            "repost",
+            "project-follow",
+            "account-follow"
           ],
-          "description": "Hypercerts event classification used to interpret and present the entry."
+          "description": "What the item is, as this service classifies the record. Kebab-case. Each feed uses its own subset: the Hypercerts feed cert, collection, project-with-cert, evaluation, measurement, endorsement and update; the MaEarth feed update, repost, project-follow and account-follow. Clients must tolerate values they do not know."
         },
-        "actor": { "type": "ref", "ref": "#actorSummary" },
+        "sortAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "The time the feed is ordered by, in UTC, and the value the page cursor encodes. It is the record's own createdAt when that is usable and otherwise the time the record was indexed, so it can differ from createdAt. Items are ordered by sortAt descending, then uri descending."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "The item record's own createdAt, returned exactly as the record wrote it (not reformatted or converted to UTC). Omitted when the record has no createdAt or its value is unusable; there is no substitute. It is not the sort time (see sortAt)."
+        },
+        "subject": {
+          "type": "union",
+          "closed": false,
+          "refs": ["#recordView", "#actorView"],
+          "description": "What the item's record points at, mirroring that record's own single subject field: a recordView for a repost, a project follow and an evaluation, an actorView for an account follow and an endorsement. Absent for records without a single subject field (cert, collection, project-with-cert, measurement and update, whose lists live in content, and MaEarth updates). The referenced record or account is not fetched, except that the Hypercerts feed hydrates an endorsed account's actorView."
+        },
+        "likeCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct accounts with a current like of the item's own uri. Set, possibly 0, only on MaEarth update items. A repost item carries its original post's counts on subject instead. A current count at response time, not a snapshot."
+        },
+        "repostCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct accounts with a current repost of the item's own uri. Same rules as likeCount."
+        },
+        "replyCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of current direct replies to the item's own uri: comment attachments listing it in subjects. Every comment record counts, not distinct authors, and replies to replies are excluded. Same rules as likeCount."
+        },
         "content": {
           "type": "union",
           "closed": false,
           "refs": [
             "#activityView",
             "#collectionView",
-            "#endorsementView",
             "#evaluationView",
             "#measurementView",
             "#updateView"
           ],
-          "description": "Kind-specific content needed to present the entry."
+          "description": "Hypercerts card fields for the item's record: set by the Hypercerts feed for every kind except endorsement, never by the MaEarth feed."
         }
       }
     }
