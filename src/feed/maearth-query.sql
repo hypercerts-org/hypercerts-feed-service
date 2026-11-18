@@ -104,11 +104,11 @@ selected_kinds AS MATERIALIZED (
   SELECT kind.collection, kind.has_targets
   FROM patterns
   CROSS JOIN LATERAL (VALUES
-    ('post', patterns.attachment_nsid,
+    ('update', patterns.attachment_nsid,
       EXISTS (SELECT 1 FROM project_subject_uris)),
-    ('projectFollow', patterns.entity_follow_nsid,
+    ('project-follow', patterns.entity_follow_nsid,
       EXISTS (SELECT 1 FROM followed_projects)),
-    ('accountFollow', patterns.follow_nsid,
+    ('account-follow', patterns.follow_nsid,
       EXISTS (SELECT 1 FROM followed_accounts)),
     ('repost', patterns.repost_nsid, false)
   ) AS kind(name, collection, has_targets)
@@ -175,13 +175,19 @@ classified AS (
   SELECT event.uri, event.cid, event.collection, event.did AS actor_did,
     event.indexed_at, event.value->>'createdAt' AS created_at,
     CASE event.collection
-      WHEN patterns.attachment_nsid THEN 'post'
-      WHEN patterns.entity_follow_nsid THEN 'projectFollow'
-      WHEN patterns.follow_nsid THEN 'accountFollow'
+      WHEN patterns.attachment_nsid THEN 'update'
+      WHEN patterns.entity_follow_nsid THEN 'project-follow'
+      WHEN patterns.follow_nsid THEN 'account-follow'
       WHEN patterns.repost_nsid THEN 'repost'
     END AS kind,
     CASE WHEN event.collection = patterns.repost_nsid
       THEN field.subject_uri END AS reposted_post_uri,
+    -- The CID the repost names for its post. The predicates below already require it to
+    -- be a non-empty string; the length bound keeps an author-controlled value from
+    -- inflating the page, and the service omits anything that is not a valid CID.
+    CASE WHEN event.collection = patterns.repost_nsid
+      AND length(field.subject_cid) <= 256
+      THEN field.subject_cid END AS reposted_post_cid,
     -- Follow targets are the values the selection predicates below already
     -- validated; each follow kind exposes only its own target.
     CASE WHEN event.collection = patterns.entity_follow_nsid
@@ -195,6 +201,7 @@ classified AS (
     SELECT event.value->'subject' AS subject,
       event.value->>'subject' AS subject_text,
       event.value->'subject'->>'uri' AS subject_uri,
+      event.value->'subject'->>'cid' AS subject_cid,
       event.value->'via' AS via
   ) AS field
   WHERE event.value->>'$type' = event.collection
@@ -262,7 +269,8 @@ classified AS (
 ),
 parsed AS (
   SELECT event.uri, event.cid, event.collection, event.actor_did, event.kind,
-    event.reposted_post_uri, event.followed_project_uri, event.followed_did,
+    event.reposted_post_uri, event.reposted_post_cid,
+    event.followed_project_uri, event.followed_did,
     event.created_at AS record_created_at,
     CASE WHEN event.created_at ~ patterns.rfc3339
       AND event.created_at !~ '-00:00$'
@@ -281,7 +289,8 @@ parsed AS (
 -- excluded.
 timed AS (
   SELECT event.uri, event.cid, event.collection, event.actor_did, event.kind,
-    event.reposted_post_uri, event.followed_project_uri, event.followed_did,
+    event.reposted_post_uri, event.reposted_post_cid,
+    event.followed_project_uri, event.followed_did,
     -- The record's own createdAt text, returned unchanged for the view and never
     -- used for ordering. It is kept only when it parsed as a real timestamp above;
     -- the length bound (an atproto datetime is at most 64 characters) keeps an
@@ -307,12 +316,13 @@ paged AS (
   ORDER BY effective_at DESC, uri DESC
   LIMIT $6::integer
 ),
--- The post whose counts an item carries: a post counts itself and a repost its
--- original post. Follows have no counted post.
+-- The post whose counts an item carries: an update counts itself and a repost its
+-- original post (the service puts the latter on the repost's subject). Follows have
+-- no counted post.
 page_targets AS (
   SELECT paged.*,
     CASE paged.kind
-      WHEN 'post' THEN paged.uri
+      WHEN 'update' THEN paged.uri
       WHEN 'repost' THEN paged.reposted_post_uri
     END AS count_uri
   FROM paged
@@ -375,7 +385,8 @@ counts AS MATERIALIZED (
   GROUP BY target_uri
 )
 SELECT item.uri, item.cid, item.collection, item.actor_did, item.kind,
-  item.reposted_post_uri, item.followed_project_uri, item.followed_did,
+  item.reposted_post_uri, item.reposted_post_cid,
+  item.followed_project_uri, item.followed_did,
   item.record_created_at,
   to_char(item.effective_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_value,
   CASE WHEN $7::boolean AND item.count_uri IS NOT NULL

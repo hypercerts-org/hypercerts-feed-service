@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 
+import { l } from '@atproto/lex'
 import { isDatetimeString, isValidDid, parseAtUriString } from '@atproto/syntax'
 import type { QueryResultRow } from 'pg'
 
@@ -11,17 +12,19 @@ import {
   MAEARTH_KINDS,
   isMaearthKind,
   type MaearthFeedParams,
-  type MaearthFeedView,
   type MaearthKind,
-  type MaearthTarget,
 } from './maearth-types.js'
 import type { FeedPageLoader, RegisteredFeed } from './registry.js'
 import { defineSqlFeed, type SqlFeedRuntime } from './sql-feed.js'
 import type { GetFeedSkeletonInput } from './types.js'
-import type { GetHydratedFeedOutput } from '../hydration/types.js'
+import type {
+  GetHydratedFeedOutput,
+  ItemSubject,
+  ItemView,
+} from '../hydration/types.js'
 import {
+  itemView,
   maearthFeedParams,
-  maearthFeedView,
 } from '../lexicons/org/hypercerts/feed/defs.js'
 
 const sql = readFileSync(
@@ -39,6 +42,8 @@ interface MaearthQueryRow extends QueryResultRow {
   /** The record's own createdAt text when it parsed as a timestamp, else null. */
   readonly record_created_at: string | null
   readonly reposted_post_uri: string | null
+  /** The repost record's own subject.cid text, bounded by the query; null on other kinds. */
+  readonly reposted_post_cid: string | null
   readonly followed_project_uri: string | null
   readonly followed_did: string | null
   /** Null on follow items, and on every row of a skeleton (counts are not computed). */
@@ -47,10 +52,7 @@ interface MaearthQueryRow extends QueryResultRow {
   readonly reply_count: number | null
 }
 
-type RowCounts = Pick<
-  MaearthFeedView,
-  'likeCount' | 'repostCount' | 'replyCount'
->
+type RowCounts = Pick<ItemView, 'likeCount' | 'repostCount' | 'replyCount'>
 
 const POST_COLLECTION = 'org.hypercerts.context.attachment'
 const PROJECT_COLLECTION = 'org.hypercerts.collection'
@@ -67,71 +69,99 @@ const isRecordUri = (value: unknown, collection: string): value is string => {
   )
 }
 
-/**
- * Each kind carries exactly its own target and no other kind's: reposts the
- * original post (`uri`), project follows the project (`uri`), account follows
- * the DID (`did`), posts nothing. A violation is a SQL projection bug, so it
- * fails the request instead of emitting a view the client cannot trust.
- */
-const rowTarget = (
-  kind: MaearthKind,
-  { repost, project, did }: { repost: unknown; project: unknown; did: unknown },
-): MaearthTarget | undefined => {
-  if (
-    kind === 'repost' &&
-    isRecordUri(repost, POST_COLLECTION) &&
-    project === null &&
-    did === null
-  )
-    return { uri: repost }
-  if (
-    kind === 'projectFollow' &&
-    repost === null &&
-    isRecordUri(project, PROJECT_COLLECTION) &&
-    did === null
-  )
-    return { uri: project }
-  if (
-    kind === 'accountFollow' &&
-    repost === null &&
-    project === null &&
-    isValidDid(did)
-  )
-    return { did }
-  if (kind === 'post' && repost === null && project === null && did === null)
-    return undefined
-  throw new Error(
-    "MaEarth query row has a target that does not match its kind: repost needs a valid reposted_post_uri, projectFollow a valid followed_project_uri, accountFollow a valid followed_did, post none, and no kind may carry another kind's target; correct the SQL projection before serving requests.",
-  )
-}
-
 const isCount = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 
 /**
- * Posts and reposts carry all three counts, follows none. A violation is a SQL
- * projection bug, so it fails the request like a mismatched target does.
+ * An update and a repost carry all three counts, follows none. A violation is a
+ * SQL projection bug, so it fails the request like a mismatched subject does.
+ * Where the counts land is decided by `buildItem`: on an update item, and on a
+ * repost's subject.
  */
-const rowCounts = (
-  kind: MaearthKind,
-  { like, repost, reply }: { like: unknown; repost: unknown; reply: unknown },
-): RowCounts => {
+const rowCounts = (kind: MaearthKind, row: MaearthQueryRow): RowCounts => {
+  const { like_count: like, repost_count: repost, reply_count: reply } = row
   if (
-    (kind === 'post' || kind === 'repost') &&
+    (kind === 'update' || kind === 'repost') &&
     isCount(like) &&
     isCount(repost) &&
     isCount(reply)
   )
     return { likeCount: like, repostCount: repost, replyCount: reply }
   if (
-    (kind === 'projectFollow' || kind === 'accountFollow') &&
+    (kind === 'project-follow' || kind === 'account-follow') &&
     like === null &&
     repost === null &&
     reply === null
   )
     return {}
   throw new Error(
-    'MaEarth query row has counts that do not match its kind: post and repost need non-negative integer like_count, repost_count and reply_count, follows need none; correct the SQL projection before serving requests.',
+    'MaEarth query row has counts that do not match its kind: update and repost need non-negative integer like_count, repost_count and reply_count, follows need none; correct the SQL projection before serving requests.',
+  )
+}
+
+/**
+ * What the item's record points at, mirroring that record's own `subject`: a
+ * repost the original post (with the post's counts and the CID the repost
+ * names, when it is a valid CID), a project follow the project (a record
+ * subject has no CID), an account follow the account, an update nothing. Each
+ * kind carries exactly its own subject columns and no other kind's. A
+ * violation is a SQL projection bug, so it fails the request instead of
+ * emitting an item the client cannot trust.
+ */
+const rowSubject = (
+  kind: MaearthKind,
+  row: MaearthQueryRow,
+  counts: RowCounts,
+): ItemSubject | undefined => {
+  const {
+    reposted_post_uri: repost,
+    reposted_post_cid: repostCid,
+    followed_project_uri: project,
+    followed_did: did,
+  } = row
+  if (
+    kind === 'repost' &&
+    isRecordUri(repost, POST_COLLECTION) &&
+    (repostCid === null || typeof repostCid === 'string') &&
+    project === null &&
+    did === null
+  )
+    // The repost record's author controls this text, so a value that is not a
+    // CID is omitted (recordView.cid is optional) rather than failing the page.
+    return {
+      $type: 'org.hypercerts.feed.defs#recordView',
+      uri: repost,
+      ...(repostCid !== null && l.isCidString(repostCid)
+        ? { cid: repostCid }
+        : {}),
+      ...counts,
+    }
+  if (
+    kind === 'project-follow' &&
+    repost === null &&
+    repostCid === null &&
+    isRecordUri(project, PROJECT_COLLECTION) &&
+    did === null
+  )
+    return { $type: 'org.hypercerts.feed.defs#recordView', uri: project }
+  if (
+    kind === 'account-follow' &&
+    repost === null &&
+    repostCid === null &&
+    project === null &&
+    isValidDid(did)
+  )
+    return { $type: 'org.hypercerts.feed.defs#actorView', did }
+  if (
+    kind === 'update' &&
+    repost === null &&
+    repostCid === null &&
+    project === null &&
+    did === null
+  )
+    return undefined
+  throw new Error(
+    "MaEarth query row has a subject that does not match its kind: repost needs a valid reposted_post_uri (and a text or null reposted_post_cid), project-follow a valid followed_project_uri, account-follow a valid followed_did, update none, and no kind may carry another kind's subject; correct the SQL projection before serving requests.",
   )
 }
 
@@ -144,24 +174,21 @@ const rowCounts = (
 const recordCreatedAt = (value: unknown): string | undefined =>
   typeof value === 'string' && isDatetimeString(value) ? value : undefined
 
-const buildView = (
-  row: MaearthQueryRow,
-  kind: MaearthKind,
-  target: MaearthTarget | undefined,
-): MaearthFeedView => {
+const buildItem = (row: MaearthQueryRow, kind: MaearthKind): ItemView => {
+  const counts = rowCounts(kind, row)
+  const subject = rowSubject(kind, row, counts)
   const createdAt = recordCreatedAt(row.record_created_at)
   return {
-    $type: 'org.hypercerts.feed.defs#maearthFeedView',
-    kind,
-    ...(createdAt === undefined ? {} : { createdAt }),
+    uri: row.uri,
     cid: row.cid,
-    actor: { did: row.actor_did },
-    ...(target === undefined ? {} : { target }),
-    ...rowCounts(kind, {
-      like: row.like_count,
-      repost: row.repost_count,
-      reply: row.reply_count,
-    }),
+    author: { did: row.actor_did },
+    kind,
+    sortAt: row.sort_value,
+    ...(createdAt === undefined ? {} : { createdAt }),
+    ...(subject === undefined ? {} : { subject }),
+    // Item counts always count the item's own uri, so only an update has them;
+    // a repost's numbers describe its subject.
+    ...(kind === 'update' ? counts : {}),
   }
 }
 
@@ -252,11 +279,6 @@ export const createMaearthFeed = (
           'MaEarth query metadata is incomplete or has an unsupported kind; correct the SQL projection before serving requests.',
         )
       }
-      const target = rowTarget(row.kind, {
-        repost: row.reposted_post_uri,
-        project: row.followed_project_uri,
-        did: row.followed_did,
-      })
       const metadata = {
         uri: row.uri,
         cid: row.cid,
@@ -266,56 +288,27 @@ export const createMaearthFeed = (
         sortValue: row.sort_value,
       }
       if (mode === 'metadata') return metadata
-      const view = buildView(row, row.kind, target)
-      return { ...metadata, sourceValue: view }
+      return { ...metadata, sourceValue: buildItem(row, row.kind) }
     },
   })
 
-const projectTarget = (target: {
-  readonly uri?: string | undefined
-  readonly did?: string | undefined
-}): MaearthTarget => ({
-  ...(target.uri === undefined ? {} : { uri: target.uri }),
-  ...(target.did === undefined ? {} : { did: target.did }),
-})
+/** The built item, checked against the lexicon and this feed's kinds before it is served. */
+const isMaearthItem = (value: unknown): value is ItemView =>
+  itemView.schema.$matches(value) && isMaearthKind(value.kind)
 
 /** Projects same-statement merge metadata and counts without identities, repost-target reads or hydration. */
 export class MaearthFeedService {
   constructor(private readonly pages: FeedPageLoader) {}
 
-  async getFeed(
-    input: GetFeedSkeletonInput,
-  ): Promise<GetHydratedFeedOutput<MaearthFeedView>> {
+  async getFeed(input: GetFeedSkeletonInput): Promise<GetHydratedFeedOutput> {
     const page = await this.pages.loadPage(input, 'with-source')
     const feed = page.rows.map((row) => {
-      const parsed = maearthFeedView.schema.$parse(row.sourceValue)
-      if (!isMaearthKind(parsed.kind)) {
+      if (!isMaearthItem(row.sourceValue)) {
         throw new Error(
-          'MaEarth view contains an unsupported kind; correct the registered query projection before serving requests.',
+          'MaEarth item does not match the itemView lexicon or has an unsupported kind; correct the registered query projection before serving requests.',
         )
       }
-      const view: MaearthFeedView = {
-        $type: 'org.hypercerts.feed.defs#maearthFeedView',
-        kind: parsed.kind,
-        ...(parsed.createdAt === undefined
-          ? {}
-          : { createdAt: parsed.createdAt }),
-        ...(parsed.cid === undefined ? {} : { cid: parsed.cid }),
-        actor: { did: parsed.actor.did },
-        ...(parsed.target === undefined
-          ? {}
-          : { target: projectTarget(parsed.target) }),
-        ...(parsed.likeCount === undefined
-          ? {}
-          : { likeCount: parsed.likeCount }),
-        ...(parsed.repostCount === undefined
-          ? {}
-          : { repostCount: parsed.repostCount }),
-        ...(parsed.replyCount === undefined
-          ? {}
-          : { replyCount: parsed.replyCount }),
-      }
-      return { subject: row.uri, view }
+      return row.sourceValue
     })
     return {
       feed,
