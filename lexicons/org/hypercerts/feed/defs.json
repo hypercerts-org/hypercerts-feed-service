@@ -32,7 +32,8 @@
               "update",
               "repost",
               "project-follow",
-              "account-follow"
+              "account-follow",
+              "funding-receipt"
             ]
           }
         }
@@ -297,7 +298,7 @@
         "author": {
           "type": "ref",
           "ref": "#actorView",
-          "description": "The account that wrote the item's own record: the poster, follower, reposter, evaluator and so on. Not the account the record points at; that is subject."
+          "description": "The account that wrote the item's own record: the poster, follower, reposter, evaluator, receipt publisher and so on. Not the account the record points at; that is subject."
         },
         "kind": {
           "type": "string",
@@ -312,14 +313,15 @@
             "update",
             "repost",
             "project-follow",
-            "account-follow"
+            "account-follow",
+            "funding-receipt"
           ],
-          "description": "What the item is, as this service classifies the record. Kebab-case. Each feed uses its own subset: the Hypercerts feed cert, collection, project-with-cert, evaluation, measurement, endorsement and update; the MaEarth feed update, repost, project-follow and account-follow. Clients must tolerate values they do not know."
+          "description": "What the item is, as this service classifies the record. Kebab-case. Each feed uses its own subset: the Hypercerts feed cert, collection, project-with-cert, evaluation, measurement, endorsement and update; the MaEarth feed update, repost, project-follow, account-follow and funding-receipt. Clients must tolerate values they do not know."
         },
         "sortAt": {
           "type": "string",
           "format": "datetime",
-          "description": "The time the feed is ordered by, in UTC, and the value the page cursor encodes. It is the record's own createdAt when that is usable and otherwise the time the record was indexed, so it can differ from createdAt. Items are ordered by sortAt descending, then uri descending."
+          "description": "The time the feed is ordered by, in UTC, and the value the page cursor encodes. It is the record's own createdAt when that is usable and otherwise the time the record was indexed, so it can differ from createdAt. A funding-receipt is ordered by its occurredAt first (then createdAt, then the indexed time), so its createdAt can be later than items listed after it. Items are ordered by sortAt descending, then uri descending."
         },
         "createdAt": {
           "type": "string",
@@ -330,12 +332,12 @@
           "type": "union",
           "closed": false,
           "refs": ["#recordView", "#actorView"],
-          "description": "What the item's record points at, mirroring that record's own single subject field: a recordView for a repost, a project follow and an evaluation, an actorView for an account follow and an endorsement. Absent for records without a single subject field (cert, collection, project-with-cert, measurement and update, whose lists live in content, and MaEarth updates). The referenced record or account is not fetched, except that the Hypercerts feed hydrates an endorsed account's actorView."
+          "description": "What the item's record points at, mirroring that record's own single subject field: a recordView for a repost, a project follow and an evaluation, an actorView for an account follow and an endorsement. Absent for records without a single subject field (cert, collection, project-with-cert, measurement and update, whose lists live in content, and MaEarth updates and funding-receipts). The referenced record or account is not fetched, except that the Hypercerts feed hydrates an endorsed account's actorView."
         },
         "likeCount": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of distinct accounts with a current like of the item's own uri. Set, possibly 0, only on MaEarth update items. A repost item carries its original post's counts on subject instead. A current count at response time, not a snapshot."
+          "description": "Number of distinct accounts with a current like of the item's own uri. Set, possibly 0, only on MaEarth update and funding-receipt items. A repost item carries its original post's counts on subject instead. A current count at response time, not a snapshot."
         },
         "repostCount": {
           "type": "integer",
@@ -345,7 +347,7 @@
         "replyCount": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of current direct replies to the item's own uri: comment attachments listing it in subjects. Every comment record counts, not distinct authors, and replies to replies are excluded. Same rules as likeCount."
+          "description": "Number of current direct replies to the item's own uri: comment attachments listing it in subjects. Every comment record counts, not distinct authors, and replies to replies are excluded. Same rules as likeCount, except that a funding-receipt has no replyCount."
         },
         "content": {
           "type": "union",

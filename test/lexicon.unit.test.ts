@@ -227,6 +227,7 @@ describe('feed Lexicon contract', () => {
       'repost',
       'project-follow',
       'account-follow',
+      'funding-receipt',
     ])
     expect(
       valueAt(hydratedMain, 'input', 'schema', 'properties', 'params'),
@@ -638,7 +639,13 @@ describe('feed Lexicon contract', () => {
 })
 
 describe('MaEarth feed Lexicon contract', () => {
-  const maearthKinds = ['update', 'repost', 'project-follow', 'account-follow']
+  const maearthKinds = [
+    'update',
+    'repost',
+    'project-follow',
+    'account-follow',
+    'funding-receipt',
+  ]
 
   it('defines bounded open-enum params with the MaEarth kinds', () => {
     expect(valueAt(defs, 'maearthFeed', 'type')).toBe('token')
@@ -690,6 +697,9 @@ describe('MaEarth feed Lexicon contract', () => {
       },
       { kind: 'update', ...counts },
       { kind: 'update' },
+      // A receipt has no subject or reply count; it has its own like and repost counts.
+      { kind: 'funding-receipt' },
+      { kind: 'funding-receipt', likeCount: 4, repostCount: 0 },
     ]) {
       expect(itemView.schema.$parse({ ...base, ...valid })).toEqual({
         ...base,

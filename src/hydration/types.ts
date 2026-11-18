@@ -148,7 +148,7 @@ export interface ItemView {
   /** The record's own `createdAt`, unchanged; absent when unusable. */
   readonly createdAt?: string
   readonly subject?: ItemSubject
-  /** Counts of `uri`; MaEarth update items only. */
+  /** Counts of `uri`; MaEarth update items (all three) and funding-receipt items (no replyCount). */
   readonly likeCount?: number
   readonly repostCount?: number
   readonly replyCount?: number

@@ -14,6 +14,7 @@ patterns AS NOT MATERIALIZED (
     'app.certified.feed.repost'::text AS repost_nsid,
     'app.certified.feed.like'::text AS like_nsid,
     'org.hypercerts.collection'::text AS collection_nsid,
+    'org.hypercerts.funding.receipt'::text AS receipt_nsid,
     -- The sort value is handed back to clients inside the cursor and re-read from it, so every
     -- effective timestamp must render as a valid four-digit-year atproto datetime.
     -- This floor applies to createdAt and indexed_at; the cutoff below keeps the
@@ -100,18 +101,23 @@ members AS MATERIALIZED (
 ),
 -- The kinds filter selects collections before any record is read. A
 -- target-driven scan is attempted only when its target set is non-empty.
+-- Funding receipts are target-driven only: they are published by a platform
+-- account, so authorship says nothing about whom a receipt concerns.
 selected_kinds AS MATERIALIZED (
-  SELECT kind.collection, kind.has_targets
+  SELECT kind.collection, kind.has_targets, kind.author_driven
   FROM patterns
   CROSS JOIN LATERAL (VALUES
     ('update', patterns.attachment_nsid,
-      EXISTS (SELECT 1 FROM project_subject_uris)),
+      EXISTS (SELECT 1 FROM project_subject_uris), true),
     ('project-follow', patterns.entity_follow_nsid,
-      EXISTS (SELECT 1 FROM followed_projects)),
+      EXISTS (SELECT 1 FROM followed_projects), true),
     ('account-follow', patterns.follow_nsid,
-      EXISTS (SELECT 1 FROM followed_accounts)),
-    ('repost', patterns.repost_nsid, false)
-  ) AS kind(name, collection, has_targets)
+      EXISTS (SELECT 1 FROM followed_accounts), true),
+    ('repost', patterns.repost_nsid, false, true),
+    ('funding-receipt', patterns.receipt_nsid,
+      EXISTS (SELECT 1 FROM followed_projects)
+        OR EXISTS (SELECT 1 FROM followed_accounts), false)
+  ) AS kind(name, collection, has_targets, author_driven)
   WHERE cardinality($3::text[]) = 0 OR kind.name = ANY($3::text[])
 ),
 -- Author-driven rows: one (did, collection) index probe per member and
@@ -128,12 +134,14 @@ author_rows AS (
       THEN source.record::jsonb ELSE NULL::jsonb END AS value
     OFFSET 0
   ) AS decoded
-  WHERE $2::text IS NULL OR member.did = $2
+  WHERE kind.author_driven
+    AND ($2::text IS NULL OR member.did = $2)
 ),
--- Target-driven rows: strangers' follows of followed accounts or projects and
--- posts about followed projects. These cannot be found by author, so the
--- collection is scanned and each record is decoded once. Only rows that hit a
--- followed target (and are not already author-driven) are kept.
+-- Target-driven rows: strangers' follows of followed accounts or projects,
+-- posts about followed projects and funding receipts for them. These cannot be
+-- found by author, so the collection is scanned and each record is decoded
+-- once. Only rows that hit a followed target (and are not already
+-- author-driven) are kept.
 target_rows AS MATERIALIZED (
   SELECT source.uri, source.cid, source.collection, source.did,
     source.indexed_at, decoded.value
@@ -163,6 +171,26 @@ target_rows AS MATERIALIZED (
       WHEN patterns.follow_nsid THEN
         decoded.value->>'subject' IN (SELECT did FROM followed_accounts)
         AND source.did NOT IN (SELECT did FROM members)
+      -- A receipt qualifies when it is for a followed project, or is to or from
+      -- a followed account. The viewer is not special: followed_accounts, never
+      -- members, is read, so only the author-independent targets count. Both
+      -- sets hold only validated project URIs and DIDs, which bounds the
+      -- compared values; `$type` excludes the text and strongRef variants.
+      WHEN patterns.receipt_nsid THEN
+        (
+          jsonb_typeof(decoded.value->'for'->'uri') = 'string'
+          AND decoded.value->'for'->>'uri' IN (SELECT uri FROM followed_projects)
+        )
+        OR (
+          decoded.value->'to'->>'$type' = 'app.certified.defs#did'
+          AND jsonb_typeof(decoded.value->'to'->'did') = 'string'
+          AND decoded.value->'to'->>'did' IN (SELECT did FROM followed_accounts)
+        )
+        OR (
+          decoded.value->'from'->>'$type' = 'app.certified.defs#did'
+          AND jsonb_typeof(decoded.value->'from'->'did') = 'string'
+          AND decoded.value->'from'->>'did' IN (SELECT did FROM followed_accounts)
+        )
       ELSE false
     END
 ),
@@ -174,11 +202,16 @@ candidates AS (
 classified AS (
   SELECT event.uri, event.cid, event.collection, event.did AS actor_did,
     event.indexed_at, event.value->>'createdAt' AS created_at,
+    -- Only a receipt's occurredAt (when the payment happened) is a time; no
+    -- other kind reads it.
+    CASE WHEN event.collection = patterns.receipt_nsid
+      THEN event.value->>'occurredAt' END AS occurred_at,
     CASE event.collection
       WHEN patterns.attachment_nsid THEN 'update'
       WHEN patterns.entity_follow_nsid THEN 'project-follow'
       WHEN patterns.follow_nsid THEN 'account-follow'
       WHEN patterns.repost_nsid THEN 'repost'
+      WHEN patterns.receipt_nsid THEN 'funding-receipt'
     END AS kind,
     CASE WHEN event.collection = patterns.repost_nsid
       THEN field.subject_uri END AS reposted_post_uri,
@@ -264,6 +297,9 @@ classified AS (
         AND split_part(field.subject_uri, '/', 5) NOT IN ('.', '..')
         AND jsonb_typeof(field.subject->'cid') = 'string'
         AND field.subject->>'cid' <> ''
+      -- Receipts reach here only from target_rows, which already applied the
+      -- rules, and expose no target; they are never author-driven.
+      WHEN patterns.receipt_nsid THEN true
       ELSE false
     END
 ),
@@ -272,6 +308,10 @@ parsed AS (
     event.reposted_post_uri, event.reposted_post_cid,
     event.followed_project_uri, event.followed_did,
     event.created_at AS record_created_at,
+    CASE WHEN event.occurred_at ~ patterns.rfc3339
+      AND event.occurred_at !~ '-00:00$'
+      AND pg_input_is_valid(event.occurred_at, 'timestamptz')
+      THEN event.occurred_at::timestamptz END AS occurred_ts,
     CASE WHEN event.created_at ~ patterns.rfc3339
       AND event.created_at !~ '-00:00$'
       AND pg_input_is_valid(event.created_at, 'timestamptz')
@@ -282,11 +322,12 @@ parsed AS (
       THEN event.indexed_at::timestamptz END AS indexed_ts
   FROM classified AS event CROSS JOIN patterns
 ),
--- A createdAt that parses as a real timestamp (year 1 onward) is the item's
--- time even beyond year 9999; `paged` then hides it as future-dated and never
--- replaces it. Only an unparseable createdAt, or one before year 1, falls back
--- to indexed_at; when that is before year 1 (or absent/invalid) the row is
--- excluded.
+-- A receipt's occurredAt, otherwise a createdAt, that parses as a real
+-- timestamp (year 1 onward) is the item's time even beyond year 9999; `paged`
+-- then hides it as future-dated and never replaces it. Only an unparseable
+-- field, or one before year 1, falls through to the next: occurredAt (receipts
+-- only), createdAt, then indexed_at; when that is before year 1 (or
+-- absent/invalid) the row is excluded.
 timed AS (
   SELECT event.uri, event.cid, event.collection, event.actor_did, event.kind,
     event.reposted_post_uri, event.reposted_post_cid,
@@ -300,6 +341,8 @@ timed AS (
       AND length(event.record_created_at) <= 64
       THEN event.record_created_at END AS record_created_at,
     COALESCE(
+      CASE WHEN event.occurred_ts >= patterns.min_effective_at
+        THEN event.occurred_ts END,
       CASE WHEN event.created_ts >= patterns.min_effective_at
         THEN event.created_ts END,
       CASE WHEN event.indexed_ts >= patterns.min_effective_at
@@ -316,14 +359,15 @@ paged AS (
   ORDER BY effective_at DESC, uri DESC
   LIMIT $6::integer
 ),
--- The post whose counts an item carries: an update counts itself and a repost its
--- original post (the service puts the latter on the repost's subject). Follows have
--- no counted post.
+-- The record whose counts an item carries: an update or a funding receipt counts
+-- itself and a repost its original post (the service puts the latter on the
+-- repost's subject). Follows have none.
 page_targets AS (
   SELECT paged.*,
     CASE paged.kind
       WHEN 'update' THEN paged.uri
       WHEN 'repost' THEN paged.reposted_post_uri
+      WHEN 'funding-receipt' THEN paged.uri
     END AS count_uri
   FROM paged
 ),
@@ -393,7 +437,9 @@ SELECT item.uri, item.cid, item.collection, item.actor_did, item.kind,
     THEN COALESCE(counts.like_count, 0) END AS like_count,
   CASE WHEN $7::boolean AND item.count_uri IS NOT NULL
     THEN COALESCE(counts.repost_count, 0) END AS repost_count,
+  -- A receipt is liked and reposted but not replied to.
   CASE WHEN $7::boolean AND item.count_uri IS NOT NULL
+    AND item.kind <> 'funding-receipt'
     THEN COALESCE(counts.reply_count, 0) END AS reply_count
 FROM page_targets AS item
 LEFT JOIN counts ON counts.target_uri = item.count_uri
