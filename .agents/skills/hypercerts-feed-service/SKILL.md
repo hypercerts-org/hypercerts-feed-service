@@ -83,12 +83,10 @@ params: {
   view: {
     $type: 'org.hypercerts.feed.defs#maearthFeedView',
     kind,
-    createdAt,
-    cid, // the item record's CID (optional)
-    actorDid, // the item record's author (optional)
-    repostedPostUri?, // repost only
-    followedProjectUri?, // projectFollow only
-    followedDid?, // accountFollow only
+    createdAt?, // the record's own createdAt, unchanged; absent when unusable; not the sort time
+    cid?, // the item record's CID
+    actor: { did }, // the item record's author, every kind; open object, ignore unknown fields
+    target?: { uri } | { did }, // repost and projectFollow: { uri }; accountFollow: { did }; post: none
     likeCount?, repostCount?, replyCount?, // post and repost only; always all three, 0 when none
   },
 }
@@ -136,12 +134,12 @@ With a valid token you can omit `viewerDid`. If you do send one, it must match t
 - A `getFeed` page can be shorter than `limit`, or empty, and still return a cursor. Invalid source records are dropped without being replaced, so keep paging.
 - Results reflect the current state, not history. Deleted records leave the feed within seconds, and pages fetched at different times may shift.
 - On the MaEarth feed, items dated more than 5 minutes in the future are hidden. A record without `createdAt` is dated by when the indexer stored it.
-- Only the MaEarth feed returns the timestamp items are sorted by. Hypercerts views can still include the record's own `content.createdAt`.
+- Neither feed returns the timestamp items are sorted by. A MaEarth view's `createdAt` is the record's own value (it can carry an offset, so compare instants, not strings) and is omitted when the record has none or it is malformed. Hypercerts views include the record's own `content.createdAt`.
 - Neither feed has a kind for likes.
 
 ## Checking a feed works
 
 1. Send the same body to `getFeedSkeleton` and `getFeed`. The `getFeed` subjects should be the skeleton's subjects in the same order, minus any invalid records it dropped. The MaEarth feed drops nothing, so its lists should match exactly. Data can change between the two requests, so retry before treating a difference as a bug.
-2. Page to the end. MaEarth `createdAt` values should never increase. Records can change while you page, so a duplicate subject is a bug only if it repeats when the data is not changing.
+2. Page to the end. Among MaEarth items that have a `createdAt`, the instants (compare as dates, not strings) should never increase. Records can change while you page, so a duplicate subject is a bug only if it repeats when the data is not changing.
 3. Filter by one kind. Only that kind should come back, and `kinds: ["bogus"]` should return 422.
 4. To measure speed, note the time on your own machine when you write the record, from an account the viewer follows. Poll `getFeed` every 1–2 seconds and compare that time with when the record first appears. Don't rely on the record key, which doesn't always contain a timestamp. On 2026-11-10, new reposts appeared in about 2 seconds on dev and 3 seconds on production.

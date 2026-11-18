@@ -68,7 +68,7 @@ Every hydrated entry has a generic source `subject` and an open `view` union. Th
 
 ### What you get (Hypercerts feed)
 
-These guarantees apply to the Hypercerts feed. MaEarth entries carry merge metadata and engagement counts only, with no `actor` or `content`, and skip source hydration; see the MaEarth section below.
+These guarantees apply to the Hypercerts feed. MaEarth entries carry merge metadata and engagement counts only, with an `actor` that is just a DID and no `content`, and skip source hydration; see the MaEarth section below.
 
 Every hydrated feed entry comes from a valid source record. Each entry has a feed-specific view and kind-specific content.
 
@@ -142,7 +142,7 @@ The order is:
 feed timestamp DESC, record URI DESC
 ```
 
-Entries appear newest first using an internal feed timestamp. HappyView stores record JSON and `indexed_at` as TEXT; the query validates JSON and timestamp text before casting, falls back from an invalid or absent `createdAt` to a finite, complete `indexed_at` in RFC3339 or legacy PostgreSQL format, and compares timestamps chronologically rather than lexically. Date-only and nonfinite fallback values are rejected. HappyView's `created_at` is row-ingestion time and is not used for feed ordering. Invalid source JSON does not abort selection; hydration drops an invalid selected source without backfilling. The Hypercerts feed does not expose its effective timestamp in either response; the experimental MaEarth feed returns its effective sort timestamp as `createdAt` in its `getFeed` view only, bounded to years 0001 through 9999 UTC, and hides rows dated more than five minutes after the database's statement time; the Hypercerts feed applies no such cutoff. Pagination moves forward from the last source row chosen before hydration, so removing an invalid hydrated entry does not move the cursor.
+Entries appear newest first using an internal feed timestamp. HappyView stores record JSON and `indexed_at` as TEXT; the query validates JSON and timestamp text before casting, falls back from an invalid or absent `createdAt` to a finite, complete `indexed_at` in RFC3339 or legacy PostgreSQL format, and compares timestamps chronologically rather than lexically. Date-only and nonfinite fallback values are rejected. HappyView's `created_at` is row-ingestion time and is not used for feed ordering. Invalid source JSON does not abort selection; hydration drops an invalid selected source without backfilling. Neither feed returns its effective timestamp. The experimental MaEarth feed's `getFeed` view returns the record's own `createdAt` instead, when it is valid. The MaEarth feed bounds the effective timestamp to years 0001 through 9999 UTC and hides rows dated more than five minutes after the database's statement time; the Hypercerts feed applies no such cutoff. Pagination moves forward from the last source row chosen before hydration, so removing an invalid hydrated entry does not move the cursor.
 
 ### Pages and database reads
 
@@ -195,10 +195,12 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
       "view": {
         "$type": "org.hypercerts.feed.defs#maearthFeedView",
         "kind": "repost",
-        "createdAt": "2026-10-14T12:00:00.123456Z",
+        "createdAt": "2026-10-14T14:00:00.123+02:00",
         "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
-        "actorDid": "did:plc:dddddddddddddddddddddddd",
-        "repostedPostUri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.context.attachment/original",
+        "actor": { "did": "did:plc:dddddddddddddddddddddddd" },
+        "target": {
+          "uri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.context.attachment/original"
+        },
         "likeCount": 4,
         "repostCount": 2,
         "replyCount": 0
@@ -209,10 +211,12 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
       "view": {
         "$type": "org.hypercerts.feed.defs#maearthFeedView",
         "kind": "projectFollow",
-        "createdAt": "2026-10-14T11:59:00.000000Z",
+        "createdAt": "2026-10-14T11:59:00Z",
         "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
-        "actorDid": "did:plc:cccccccccccccccccccccccc",
-        "followedProjectUri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.collection/project"
+        "actor": { "did": "did:plc:cccccccccccccccccccccccc" },
+        "target": {
+          "uri": "at://did:plc:eeeeeeeeeeeeeeeeeeeeeeee/org.hypercerts.collection/project"
+        }
       }
     },
     {
@@ -220,23 +224,24 @@ Both procedures accept `feedId: org.hypercerts.feed.defs#maearthFeed` and params
       "view": {
         "$type": "org.hypercerts.feed.defs#maearthFeedView",
         "kind": "accountFollow",
-        "createdAt": "2026-10-14T11:58:00.000000Z",
         "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
-        "actorDid": "did:plc:cccccccccccccccccccccccc",
-        "followedDid": "did:plc:dddddddddddddddddddddddd"
+        "actor": { "did": "did:plc:cccccccccccccccccccccccc" },
+        "target": { "did": "did:plc:dddddddddddddddddddddddd" }
       }
     }
   ]
 }
 ```
 
-`subject` identifies the item's own record, not its target. `createdAt` is the **effective sort timestamp** (validated source `createdAt`, otherwise valid HappyView `indexed_at`), normalized to UTC with microseconds. It is not necessarily the literal source field. Repost targets are not fetched, and their existence is not required. MaEarth can drop invisible entries, but must keep advancing the returned cursor, even for an empty visible page.
+`subject` identifies the item's own record, not its target. Repost targets are not fetched, and their existence is not required. MaEarth can drop invisible entries, but must keep advancing the returned cursor, even for an empty visible page. The third item above has no `createdAt`, as explained next.
 
-**Record identity.** Every item this service returns carries `cid`, the CID of its own record (the `subject`), and `actorDid`, the record's author: the poster, follower or reposter, which is always the authority of `subject`. Both are optional in the Lexicon, so clients must tolerate their absence. They come from the record row the statement already selected, so they add no query or read.
+**`createdAt` is the record's own.** It is the item record's `createdAt` exactly as the record wrote it: an offset such as `+02:00` is kept, and nothing is converted to UTC or reformatted. It is **not** the sort time. It is returned only when it is a valid atproto datetime: a real timestamp of at most 64 characters in RFC3339 form with a timezone, and not the unknown-offset form `-00:00`. Otherwise (missing, malformed, impossible date) it is omitted, and there is no substitute: not `indexed_at`, not the sort time. Treat `createdAt` as optional, and compare two values as instants, not strings. Ordering, the cursor and the future-dated cutoff still use the separate effective timestamp (below), which this view no longer returns, so an item can sit in the feed without a `createdAt`. A `createdAt` that is valid but unusable for ordering (before year 1 in UTC) is still returned as written. The Hypercerts feed likewise shows the record's own `createdAt` in its content views.
 
-**Follow targets.** A `projectFollow` carries `followedProjectUri`, the followed `org.hypercerts.collection` URI that resolved to a `type` of `project`. An `accountFollow` carries `followedDid`, the DID in the follow record's subject. Each is absent for every other kind, and the follower is the item's `actorDid`, the authority of its `subject` URI. Both values come from the same statement and the same records already read to select the item, so they add no query or read. They are not cross-checked against the requester: a stranger's follow of a followed account names that followed account, and a followed account's follow names whomever it followed. The skeleton does not carry them. The fields are optional additions to the open view, so existing consumers are unaffected.
+**Actor and record identity.** Every item, of every kind, carries `actor`, an object with the record author's `did`: the poster, follower or reposter, which is always the authority of `subject`. It carries `cid`, the CID of its own record (the `subject`), too; `cid` is optional in the Lexicon, so clients must tolerate its absence, while `actor` is required. Both come from the record row the statement already selected, so they add no query or read. `actor` is a named, open object (`#maearthActor`): later versions may add fields such as a handle, and clients must ignore fields they do not know.
 
-**Counts.** `post` and `repost` items carry `likeCount`, `repostCount` and `replyCount`: always all three, `0` when there are none. Follow items carry none. A post counts itself. A repost counts its original post (`repostedPostUri`), not the repost record, so a repost and the post it repeats show the same numbers. The rules match `app.certified.feed.getReactionCounts` and `org.hypercerts.context.getCommentCounts` on api.hypercerts.dev:
+**Targets.** A `repost` carries `target.uri`, the original attachment's URI. A `projectFollow` carries `target.uri`, the followed `org.hypercerts.collection` URI that resolved to a `type` of `project`. An `accountFollow` carries `target.did`, the DID in the follow record's subject. A `post` has no `target`. This service sets exactly the one field its kind needs; the Lexicon (`#maearthTarget`) leaves both optional so other shapes can be added later, and clients must ignore fields they do not know. The follower, reposter or poster is the item's `actor`. Targets come from the same statement and the same records already read to select the item, so they add no query or read. They are not cross-checked against the requester: a stranger's follow of a followed account names that followed account, and a followed account's follow names whomever it followed. The skeleton does not carry them.
+
+**Counts.** `post` and `repost` items carry `likeCount`, `repostCount` and `replyCount`: always all three, `0` when there are none. Follow items carry none. A post counts itself. A repost counts its original post (`target.uri`), not the repost record, so a repost and the post it repeats show the same numbers. The rules match `app.certified.feed.getReactionCounts` and `org.hypercerts.context.getCommentCounts` on api.hypercerts.dev:
 
 - Likes and reposts count distinct accounts: the current `app.certified.feed.like` or `app.certified.feed.repost` records whose `subject.uri` equals the post, CID ignored, counted once per author DID. A like that names the post only in `via` is not a like of it. A repost by someone the viewer does not follow counts too.
 - Replies count every current `org.hypercerts.context.attachment` with `contentType` `comment` that lists the post in `subjects[].uri`. Each comment counts, so one author's several comments count several times; a reply to a reply is not a reply to the post. An attachment of any other `contentType` that points at the post is not a reply.
@@ -264,7 +269,7 @@ The full current graph is resolved in SQL without the previous 500-account cap o
 
 The viewer's own graph edges can appear because their targets are followed. The viewer's own reposts are not implicitly included. Project identity matches the URI, not a CID.
 
-**Effective timestamp.** The validated source `createdAt`, otherwise valid `indexed_at`, normalized to UTC with microseconds. Every returned value lies within `0001-01-01T00:00:00Z` through `9999-12-31T23:59:59.999999Z`. A `createdAt` that is unparseable or malformed, or that falls before year 1 in UTC (for example `0001-01-01T00:00:00+05:00`), falls back to a valid `indexed_at` from year 1 onward; if `indexed_at` is also before year 1 or invalid, the row is excluded. A `createdAt` that parses as a real timestamp beyond year 9999 in UTC (for example `9999-12-31T23:59:59-01:00`) does not fall back: it is future-dated and hidden (next paragraph). The year-1 floor and the future cutoff keep every returned `createdAt` a valid atproto datetime and every cursor value round-trippable.
+**Effective timestamp.** The internal sort time: the validated source `createdAt`, otherwise valid `indexed_at`, normalized to UTC with microseconds. It orders items and is the cursor's value, and no view returns it. Every value lies within `0001-01-01T00:00:00Z` through `9999-12-31T23:59:59.999999Z`. A `createdAt` that is unparseable or malformed, or that falls before year 1 in UTC (for example `0001-01-01T00:00:00+05:00`), falls back to a valid `indexed_at` from year 1 onward; if `indexed_at` is also before year 1 or invalid, the row is excluded. A `createdAt` that parses as a real timestamp beyond year 9999 in UTC (for example `9999-12-31T23:59:59-01:00`) does not fall back: it is future-dated and hidden (next paragraph). The year-1 floor and the future cutoff keep every cursor value a valid atproto datetime and round-trippable.
 
 **Future-dated items are hidden.** A row whose effective timestamp is later than the database's statement time plus five minutes is dropped, whatever its kind, and whether it was author-driven or target-driven. The cutoff uses PostgreSQL's `statement_timestamp()` (one reading per statement) and a single named skew constant in `src/feed/maearth-query.sql`. Any `createdAt` that parses as a real future timestamp (2099, `9999-12-31T23:59:59Z`, or a value that lands beyond year 9999 after its offset) is excluded, **not** replaced by `indexed_at`; only an unparseable `createdAt`, or one before year 1, falls back, as above. An item whose only valid timestamp is a future `indexed_at` is also hidden. Hidden items are removed before the page limit is applied, so they never shorten a page or move the cursor. Because the cutoff moves with the clock, an item dated slightly in the future becomes visible once its time arrives, but only on a traversal that has not already paged past its position.
 
@@ -285,7 +290,7 @@ The planner decides the physical plan. There is **no `EXPLAIN (ANALYZE, BUFFERS)
 
 ### Known limitations
 
-- **Author-controlled timestamps within the skew.** Far-future items can no longer pin themselves to the top, but an item may still claim any time up to five minutes ahead of the database clock, and a backdated `createdAt` sorts wherever its author says. MaEarth merges by `createdAt`, so such an item can briefly float above its own gifts. Target-driven rows keep this open to any account that follows a followed account or project, or posts about a followed project. (Any account can likewise place a post about any project into its followers' feeds; MaEarth's own visibility filtering is the control.) Only the database clock is read. The five-minute skew assumes it is reasonably accurate; a database clock running more than that behind its writers would hide valid items.
+- **Author-controlled timestamps within the skew.** Far-future items can no longer pin themselves to the top, but an item may still claim any time up to five minutes ahead of the database clock, and a backdated `createdAt` sorts wherever its author says. MaEarth merges by its own rules, so such an item can briefly float above its own gifts; the view's `createdAt` shows the author's claim, and is absent when the claim is unusable. Target-driven rows keep this open to any account that follows a followed account or project, or posts about a followed project. (Any account can likewise place a post about any project into its followers' feeds; MaEarth's own visibility filtering is the control.) Only the database clock is read. The five-minute skew assumes it is reasonably accurate; a database clock running more than that behind its writers would hide valid items.
 - **The Hypercerts feed still has the far-future exposure.** `src/feed/feed-query.sql` accepts any valid in-range `createdAt`, including 2099, so a far-future item pins to the top of that feed until removed. Open question: decide whether the Hypercerts feed should adopt the same cutoff, which would change its public ordering semantics and its tests.
 - **Counts depend on a complete `happyview_record_refs`.** HappyView ignores errors when writing it and refills it only when it is empty, so a failed write silently undercounts a post. [database-contract.md](database-contract.md#reaction-counts-and-happyview_record_refs) has a read-only query to re-check it periodically.
 - `actorDid` only narrows the viewer's Following scope; it cannot serve a public profile page for someone the viewer does not follow.

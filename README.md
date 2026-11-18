@@ -114,10 +114,12 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
       "view": {
         "$type": "org.hypercerts.feed.defs#maearthFeedView",
         "kind": "repost",
-        "createdAt": "2026-11-10T07:03:34.692000Z",
+        "createdAt": "2026-11-10T07:03:34.692Z",
         "cid": "bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u",
-        "actorDid": "did:plc:bqkfguw3v76x5arrun2vybp2",
-        "repostedPostUri": "at://did:plc:uuvfp7xadcud56pjxbka26lc/org.hypercerts.context.attachment/3mxbyjkmrkk2u",
+        "actor": { "did": "did:plc:bqkfguw3v76x5arrun2vybp2" },
+        "target": {
+          "uri": "at://did:plc:uuvfp7xadcud56pjxbka26lc/org.hypercerts.context.attachment/3mxbyjkmrkk2u"
+        },
         "likeCount": 4,
         "repostCount": 2,
         "replyCount": 0
@@ -128,7 +130,7 @@ curl -sS https://feed.hypercerts.dev/xrpc/org.hypercerts.feed.getFeed \
 }
 ```
 
-Items carry their record `cid` and author `actorDid` (both optional in the Lexicon). Project follows carry `followedProjectUri`, and account follows carry `followedDid`. Post and repost items carry `likeCount`, `repostCount` and `replyCount` (a repost shows its original post's counts; follows have none).
+Every item has `actor: { did }`, the record's author, and an optional `cid`. `createdAt` is the record's own value, unchanged, and is omitted when the record's value is unusable; it is not the sort time. A repost and a project follow carry `target: { uri }`, an account follow `target: { did }`, and a post no `target`. `actor` and `target` are open objects: ignore fields you do not know. Post and repost items carry `likeCount`, `repostCount` and `replyCount` (a repost shows its original post's counts; follows have none).
 
 Full request rules, selection, errors, and pagination: [docs/api.md](docs/api.md).
 
