@@ -291,7 +291,7 @@ describe('Hypercerts feed definition against Postgres', () => {
         cid,
         actorDid: author,
         collection: 'org.hypercerts.claim.activity',
-        kind: 'cert.create',
+        kind: 'cert',
         sortValue: '2026-07-20T00:00:02.000000Z',
       },
     ])
@@ -593,14 +593,14 @@ describe('Hypercerts feed definition against Postgres', () => {
     const metadata = await pages.loadPage(request, 'metadata')
 
     expect(metadata.rows.map((item) => item.kind)).toEqual([
-      'evaluation.create',
-      'project.created_with_cert',
-      'update.create',
-      'measurement.create',
-      'cert.create',
-      'endorsement.award',
+      'evaluation',
+      'project-with-cert',
+      'update',
+      'measurement',
+      'cert',
+      'endorsement',
     ])
-    expect(output.feed.map((item) => item.subject)).toEqual([
+    expect(output.feed.map((item) => item.uri)).toEqual([
       expect.stringContaining('/org.hypercerts.context.evaluation/'),
       collectionUri,
       expect.stringContaining('/org.hypercerts.context.attachment/update'),
@@ -608,7 +608,7 @@ describe('Hypercerts feed definition against Postgres', () => {
       endorsedUri,
       visibleAwardUri,
     ])
-    expect(output.feed.some((item) => item.subject === activityUri)).toBe(false)
+    expect(output.feed.some((item) => item.uri === activityUri)).toBe(false)
     expect(metadata.rows[0]?.sortValue).toBe('2026-07-21T11:00:00.000000Z')
     expect(
       metadata.rows.find((item) => item.uri === dateOnlyUri)?.sortValue,
@@ -619,10 +619,10 @@ describe('Hypercerts feed definition against Postgres', () => {
         allowed: ['high-quality'],
         includeUnrated: false,
       },
-      kinds: ['project.created_with_cert'],
+      kinds: ['project-with-cert'],
     })
     expect(projectOnly.feed).toHaveLength(1)
-    expect(projectOnly.feed[0]?.subject).toBe(collectionUri)
+    expect(projectOnly.feed[0]?.uri).toBe(collectionUri)
   })
 
   it('detects organizations only through the exact organization self record', async () => {
@@ -665,7 +665,7 @@ describe('Hypercerts feed definition against Postgres', () => {
       },
     )
 
-    expect(output.feed.map((item) => item.subject)).toEqual([personActivity])
+    expect(output.feed.map((item) => item.uri)).toEqual([personActivity])
   })
 
   it('filters organizations using active trusted bare-DID HappyView labels', async () => {
@@ -756,7 +756,7 @@ describe('Hypercerts feed definition against Postgres', () => {
         },
       },
     )
-    expect(ratedOnly.feed.map((item) => item.subject)).toEqual([
+    expect(ratedOnly.feed.map((item) => item.uri)).toEqual([
       activityUris.get(allowedOrg),
     ])
 
@@ -769,7 +769,7 @@ describe('Hypercerts feed definition against Postgres', () => {
         },
       },
     )
-    expect(withUnrated.feed.map((item) => item.subject)).toEqual([
+    expect(withUnrated.feed.map((item) => item.uri)).toEqual([
       activityUris.get(allowedOrg),
       activityUris.get(expiredOrg),
       activityUris.get(untrustedOrg),
@@ -872,7 +872,7 @@ describe('Hypercerts feed definition against Postgres', () => {
 
     const output = await getFeedForFollows([author])
 
-    expect(output.feed.map((item) => item.subject)).toEqual([
+    expect(output.feed.map((item) => item.uri)).toEqual([
       indexedLaterAcrossOffsets,
       indexedEarlierUtc,
       jsonCreatedAt,
@@ -929,13 +929,13 @@ describe('Hypercerts feed definition against Postgres', () => {
     const output = await service.getFeedSkeleton(request)
     const metadata = await pages.loadPage(request, 'metadata')
 
-    expect(output.feed.map((item) => item.subject)).toEqual([
+    expect(output.feed.map((item) => item.uri)).toEqual([
       fallbackCollection,
       materializedCollection,
     ])
     expect(metadata.rows.map((item) => item.kind)).toEqual([
-      'project.created_with_cert',
-      'project.created_with_cert',
+      'project-with-cert',
+      'project-with-cert',
     ])
   })
 
@@ -1048,7 +1048,7 @@ describe('Hypercerts feed definition against Postgres', () => {
       limit: 50,
     })
 
-    expect(output.feed.map((item) => item.subject)).toEqual([
+    expect(output.feed.map((item) => item.uri)).toEqual([
       offsetOrderedActivity,
       subjectActivity,
       offsetOrderedAwardUri,
@@ -1131,19 +1131,17 @@ describe('Hypercerts feed definition against Postgres', () => {
     )
     const allowedOutput = await getFeedForFollows([allowedIssuer])
 
-    expect(allowedOutput.feed.map((item) => item.subject)).toEqual([
+    expect(allowedOutput.feed.map((item) => item.uri)).toEqual([
       allowedAwardUri,
     ])
     expect(
-      allowedOutput.feed.some((item) => item.subject === disallowedAwardUri),
+      allowedOutput.feed.some((item) => item.uri === disallowedAwardUri),
     ).toBe(false)
     expect(
-      allowedOutput.feed.some((item) => item.subject === malformedAwardUri),
+      allowedOutput.feed.some((item) => item.uri === malformedAwardUri),
     ).toBe(false)
     expect(
-      allowedOutput.feed.some(
-        (item) => item.subject === disallowedSubjectActivity,
-      ),
+      allowedOutput.feed.some((item) => item.uri === disallowedSubjectActivity),
     ).toBe(false)
   })
 
@@ -1271,18 +1269,16 @@ describe('Hypercerts feed definition against Postgres', () => {
     const output = await service.getFeedSkeleton(request)
     const metadata = await pages.loadPage(request, 'metadata')
 
-    expect(output.feed.map((item) => item.subject)).toEqual([
+    expect(output.feed.map((item) => item.uri)).toEqual([
       collectionUri,
       activityUri,
     ])
     expect(metadata.rows.map((item) => item.kind)).toEqual([
-      'collection.create',
-      'cert.create',
+      'collection',
+      'cert',
     ])
-    expect(output.feed.some((item) => item.subject === awardUri)).toBe(false)
-    expect(output.feed.some((item) => item.subject === subjectActivity)).toBe(
-      false,
-    )
+    expect(output.feed.some((item) => item.uri === awardUri)).toBe(false)
+    expect(output.feed.some((item) => item.uri === subjectActivity)).toBe(false)
   })
 
   it('suppresses a paired activity across a pagination boundary', async () => {
@@ -1326,18 +1322,15 @@ describe('Hypercerts feed definition against Postgres', () => {
     const request = feedRequest(viewer, { limit: 2 })
     const first = await service.getFeedSkeleton(request)
     const metadata = await pages.loadPage(request, 'metadata')
-    expect(first.feed.map((item) => item.subject)).toEqual([
-      collection,
-      standalone,
-    ])
-    expect(metadata.rows[0]?.kind).toBe('project.created_with_cert')
+    expect(first.feed.map((item) => item.uri)).toEqual([collection, standalone])
+    expect(metadata.rows[0]?.kind).toBe('project-with-cert')
 
     if (first.cursor === undefined)
       throw new Error('expected a next-page cursor')
     const second = await service.getFeedSkeleton(
       feedRequest(viewer, { limit: 2, cursor: first.cursor }),
     )
-    expect(second.feed.map((item) => item.subject)).toEqual([old])
+    expect(second.feed.map((item) => item.uri)).toEqual([old])
   })
 
   it('paginates equal timestamps by descending URI without repeats', async () => {
@@ -1362,7 +1355,7 @@ describe('Hypercerts feed definition against Postgres', () => {
     const first = await service.getFeedSkeleton(
       feedRequest(viewer, { limit: 2 }),
     )
-    expect(first.feed.map((item) => item.subject)).toEqual([uris[2], uris[1]])
+    expect(first.feed.map((item) => item.uri)).toEqual([uris[2], uris[1]])
     expect(first.cursor).toBeDefined()
 
     if (first.cursor === undefined) {
@@ -1371,7 +1364,7 @@ describe('Hypercerts feed definition against Postgres', () => {
     const second = await service.getFeedSkeleton(
       feedRequest(viewer, { limit: 2, cursor: first.cursor }),
     )
-    expect(second.feed.map((item) => item.subject)).toEqual([uris[0]])
+    expect(second.feed.map((item) => item.uri)).toEqual([uris[0]])
     expect(second.cursor).toBeUndefined()
   })
 
@@ -1445,12 +1438,12 @@ describe('Hypercerts feed definition against Postgres', () => {
     )
 
     const authorOutput = await getFeedForFollows([evaluator])
-    expect(authorOutput.feed).toEqual([{ subject: awardUri }])
+    expect(authorOutput.feed).toEqual([{ uri: awardUri }])
 
     const evaluatorOutput = await service.getFeedSkeleton(
       feedRequest(viewer, { trustedEvaluators: [evaluator] }),
     )
-    expect(evaluatorOutput.feed).toEqual([{ subject: subjectActivity }])
+    expect(evaluatorOutput.feed).toEqual([{ uri: subjectActivity }])
   })
 
   it('always derives the base scope from the viewer current follows', async () => {
@@ -1476,10 +1469,8 @@ describe('Hypercerts feed definition against Postgres', () => {
 
     const output = await service.getFeedSkeleton(feedRequest(viewer))
 
-    expect(output.feed.map((item) => item.subject)).toEqual([followedUri])
-    expect(output.feed.some((item) => item.subject === unfollowedUri)).toBe(
-      false,
-    )
+    expect(output.feed.map((item) => item.uri)).toEqual([followedUri])
+    expect(output.feed.some((item) => item.uri === unfollowedUri)).toBe(false)
   })
 
   it('supports more than 500 followed accounts without truncating the scope', async () => {
@@ -1518,6 +1509,6 @@ describe('Hypercerts feed definition against Postgres', () => {
 
     const output = await service.getFeedSkeleton(feedRequest(viewer))
 
-    expect(output.feed.map((item) => item.subject)).toEqual([selectedUri])
+    expect(output.feed.map((item) => item.uri)).toEqual([selectedUri])
   })
 })

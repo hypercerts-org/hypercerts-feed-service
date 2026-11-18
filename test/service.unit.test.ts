@@ -28,7 +28,7 @@ const row = (suffix: string, sortValue: string): InternalFeedRow => ({
   cid,
   collection: 'org.hypercerts.claim.activity',
   actorDid,
-  kind: 'cert.create',
+  kind: 'cert',
   sortValue,
 })
 
@@ -79,7 +79,7 @@ describe('FeedService', () => {
     const service = new FeedService(pages)
 
     await expect(service.getFeedSkeleton(input)).resolves.toEqual({
-      feed: rows.map((item) => ({ subject: item.uri })),
+      feed: rows.map((item) => ({ uri: item.uri })),
       cursor,
     })
     expect(pages.calls).toEqual([{ input, mode: 'metadata' }])
@@ -94,7 +94,7 @@ describe('FeedService', () => {
 
     const output = await service.getFeedSkeleton(input)
     expect(output.feed).toEqual([
-      { subject: row('1', '2026-07-21T10:00:01.000000Z').uri },
+      { uri: row('1', '2026-07-21T10:00:01.000000Z').uri },
     ])
     expect(Object.hasOwn(output, 'cursor')).toBe(false)
   })

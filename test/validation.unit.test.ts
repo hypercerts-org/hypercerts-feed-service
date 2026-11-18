@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { type FeedError, FeedErrorCode } from '../src/feed/errors.js'
-import type { HypercertsFeedParams } from '../src/feed/types.js'
+import { FEED_KINDS, type HypercertsFeedParams } from '../src/feed/types.js'
 import { normalizeFeedRequest } from '../src/feed/validation.js'
 
 const paramsType = 'org.hypercerts.feed.defs#hypercertsFeedParams'
@@ -60,6 +60,32 @@ describe('feed request validation', () => {
         status: 422,
       }),
     )
+  })
+
+  it('accepts every kebab-case kind and rejects the former dotted names with the supported list', () => {
+    expect(
+      normalizeFeedRequest(
+        feedParams({ viewerDid: viewer, kinds: [...FEED_KINDS] }),
+      ).kinds,
+    ).toEqual(FEED_KINDS)
+
+    for (const former of [
+      'cert.create',
+      'collection.create',
+      'project.created_with_cert',
+      'evaluation.create',
+      'measurement.create',
+      'update.create',
+      'endorsement.award',
+    ]) {
+      expect(() =>
+        normalizeFeedRequest(
+          feedParams({ viewerDid: viewer, kinds: [former] }),
+        ),
+      ).toThrow(
+        'use one of: cert, collection, project-with-cert, evaluation, measurement, endorsement, update.',
+      )
+    }
   })
 
   it('rejects empty event kind values', () => {

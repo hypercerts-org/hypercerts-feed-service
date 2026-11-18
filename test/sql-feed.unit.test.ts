@@ -41,7 +41,7 @@ interface ScoredDatabaseRow extends QueryResultRow {
   readonly cid: string
   readonly collection: string
   readonly actor_did: string
-  readonly kind: 'cert.create'
+  readonly kind: 'cert'
   readonly sort_value: string
   readonly score: number
   readonly selected_source_uri: string | null
@@ -126,7 +126,7 @@ const databaseRow = (suffix: string, score: number): ScoredDatabaseRow => {
     cid,
     collection: 'org.hypercerts.claim.activity',
     actor_did: actorDid,
-    kind: 'cert.create',
+    kind: 'cert',
     sort_value: `2026-07-21T10:00:0${String(score)}.000000Z`,
     score,
     selected_source_uri: uri,
@@ -221,7 +221,7 @@ describe('defineSqlFeed', () => {
           cid,
           collection: source.collection,
           actorDid,
-          kind: 'cert.create',
+          kind: 'cert',
           sortValue: source.sort_value,
           score: 1,
           sourceValue: { score: 1 },
@@ -290,7 +290,7 @@ describe('defineSqlFeed', () => {
       cid,
       collection: 'org.hypercerts.claim.activity',
       actorDid,
-      kind: 'cert.create',
+      kind: 'cert',
       sortValue: '2026-07-21T10:00:01.000000Z',
       score: 1,
     }
