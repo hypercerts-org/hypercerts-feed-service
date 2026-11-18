@@ -7,8 +7,10 @@ import { createMaearthFeed, MaearthFeedService } from '../src/feed/maearth.js'
 import {
   MAEARTH_FEED_ID,
   MAEARTH_FEED_PARAMS_TYPE,
+  type MaearthFeedView,
 } from '../src/feed/maearth-types.js'
 import { FeedRegistry } from '../src/feed/registry.js'
+import { FeedService } from '../src/feed/service.js'
 import type { GetFeedSkeletonInput } from '../src/feed/types.js'
 import { Metrics } from '../src/metrics.js'
 
@@ -19,11 +21,10 @@ if (connectionString === undefined || connectionString === '')
   )
 // The session-local temp table lives on this one connection, so it must never idle out.
 const pool = new Pool({ connectionString, max: 1, idleTimeoutMillis: 0 })
-const service = new MaearthFeedService(
-  new FeedRegistry([
-    createMaearthFeed({ database: pool, metrics: new Metrics() }),
-  ]),
-)
+const registry = new FeedRegistry([
+  createMaearthFeed({ database: pool, metrics: new Metrics() }),
+])
+const service = new MaearthFeedService(registry)
 const did = () => `did:web:${randomUUID()}.test`
 const project = (actor: string, key = 'project') =>
   `at://${actor}/org.hypercerts.collection/${key}`
@@ -40,6 +41,15 @@ const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
 /** The DID authority of a record URI, which is the item's actor. */
 const authorOf = (uri: string) => uri.split('/')[2]
 
+/** Every string starting with `at://` at any depth, as HappyView's `extract_at_uris` collects. */
+const atUris = (value: unknown): string[] => {
+  if (typeof value === 'string') return value.startsWith('at://') ? [value] : []
+  if (Array.isArray(value)) return value.flatMap(atUris)
+  if (typeof value === 'object' && value !== null)
+    return Object.values(value).flatMap(atUris)
+  return []
+}
+
 const seed = async (
   actor: string,
   collectionName: string,
@@ -48,6 +58,11 @@ const seed = async (
 ) => {
   const key = options.key ?? randomUUID()
   const uri = `at://${actor}/${collectionName}/${key}`
+  const record = {
+    $type: collectionName,
+    createdAt: '2026-10-14T12:00:00Z',
+    ...body,
+  }
   await pool.query(
     'INSERT INTO happyview_records (uri, did, collection, cid, record, indexed_at) VALUES ($1,$2,$3,$4,$5,$6)',
     [
@@ -55,15 +70,16 @@ const seed = async (
       actor,
       collectionName,
       cid,
-      JSON.stringify({
-        $type: collectionName,
-        createdAt: '2026-10-14T12:00:00Z',
-        ...body,
-      }),
+      JSON.stringify(record),
       options.indexedAt === undefined
         ? '2026-10-14 12:00:00+00'
         : options.indexedAt,
     ],
+  )
+  // HappyView keeps happyview_record_refs complete for every stored record.
+  await pool.query(
+    'INSERT INTO happyview_record_refs (source_uri, target_uri, collection) SELECT $1, target, $2 FROM unnest($3::text[]) AS target ON CONFLICT DO NOTHING',
+    [uri, collectionName, atUris(record)],
   )
   return uri
 }
@@ -97,6 +113,21 @@ const repost = (
   subject: Record<string, unknown>,
   extra: Record<string, unknown> = {},
 ) => seed(actor, 'app.certified.feed.repost', { subject, ...extra })
+const like = (
+  actor: string,
+  subject: Record<string, unknown>,
+  extra: Record<string, unknown> = {},
+) => seed(actor, 'app.certified.feed.like', { subject, ...extra })
+const comment = (
+  actor: string,
+  subjectUris: string[],
+  extra: Record<string, unknown> = {},
+) =>
+  seed(actor, 'org.hypercerts.context.attachment', {
+    contentType: 'comment',
+    subjects: subjectUris.map((uri) => ({ uri, cid })),
+    ...extra,
+  })
 /** Stores a current org.hypercerts.collection record at `project(actor, key)`. */
 const seedCollection = (
   actor: string,
@@ -187,6 +218,15 @@ beforeAll(async () => {
     uri text PRIMARY KEY, did text NOT NULL, collection text NOT NULL,
     cid text NOT NULL, record text NOT NULL, indexed_at text
   )`)
+  // Mirrors HappyView's record_refs migration; the count lookup relies on its index.
+  await pool.query(`CREATE TEMP TABLE happyview_record_refs (
+    source_uri text NOT NULL REFERENCES happyview_records(uri) ON DELETE CASCADE,
+    target_uri text NOT NULL, collection text NOT NULL,
+    PRIMARY KEY (source_uri, target_uri)
+  )`)
+  await pool.query(
+    'CREATE INDEX idx_record_refs_target ON happyview_record_refs (target_uri, collection)',
+  )
 })
 afterAll(async () => {
   await pool.end()
@@ -297,6 +337,10 @@ describe('MaEarth Following SQL', () => {
           cid,
           actorDid: author,
           repostedPostUri: target,
+          likeCount: 0,
+          // Distinct reposters: author (three records, CID ignored), stranger, viewer.
+          repostCount: 3,
+          replyCount: 0,
         },
       },
     ])
@@ -898,5 +942,98 @@ describe('MaEarth future-dated items', () => {
     expect(await subjects(viewer)).toEqual(
       [viewerFollow, viewerProject, visible].sort(),
     )
+  })
+})
+
+describe('MaEarth item counts', () => {
+  const countsOf = ({
+    likeCount,
+    repostCount,
+    replyCount,
+  }: MaearthFeedView) => ({
+    likeCount,
+    repostCount,
+    replyCount,
+  })
+
+  it('counts distinct likers and reposters and direct replies, gives a repost item its original post counts, and gives follows none', async () => {
+    const viewer = did(),
+      author = did(),
+      reposter = did(),
+      [likerA, likerB, likerC, likerD, likerE] = [
+        did(),
+        did(),
+        did(),
+        did(),
+        did(),
+      ],
+      [replier, stranger] = [did(), did()]
+    const viewerFollow = await follow(viewer, author)
+    await follow(viewer, reposter)
+    const counted = await update(author, { createdAt: '2026-10-14T12:03:00Z' })
+    const untouched = await update(author, {
+      createdAt: '2026-10-14T12:02:00Z',
+    })
+    const other = post(stranger)
+    const target = { uri: counted, cid }
+
+    // Likes: distinct DIDs, matched by subject URI whatever the CID or via.
+    await like(likerA, target)
+    await like(likerA, { uri: counted, cid: 'ignored' })
+    await like(likerB, target)
+    const viaRepost = await repost(stranger, target)
+    await like(likerE, target, { via: { uri: viaRepost, cid } })
+    // A wrong $type, or a subject elsewhere that merely names the post in via, is no like of it.
+    await like(likerC, target, { $type: 'app.certified.feed.repost' })
+    await like(likerD, { uri: other, cid }, { via: target })
+
+    // Reposts: the feed's own repost item counts too.
+    const repostItem = await repost(reposter, target)
+
+    // Replies: every direct comment counts, not distinct authors.
+    const firstReply = await comment(replier, [counted])
+    await comment(replier, [counted])
+    await comment(stranger, [counted, other])
+    await comment(likerA, [firstReply])
+    // Naming the post outside subjects, here in its content, does not make a reply to it.
+    await comment(likerB, [other], { content: [{ uri: counted }] })
+    await seed(stranger, 'org.hypercerts.context.attachment', {
+      contentType: 'evidence',
+      subjects: [target],
+    })
+
+    const feed = (await service.getFeed(request(viewer))).feed
+    const viewOf = (subject: string) => {
+      const entry = feed.find((item) => item.subject === subject)
+      if (entry === undefined) throw new Error(`Missing feed item ${subject}`)
+      return entry.view
+    }
+    const originalCounts = { likeCount: 3, repostCount: 2, replyCount: 3 }
+    expect(countsOf(viewOf(counted))).toEqual(originalCounts)
+    expect(countsOf(viewOf(untouched))).toEqual({
+      likeCount: 0,
+      repostCount: 0,
+      replyCount: 0,
+    })
+    expect(countsOf(viewOf(repostItem))).toEqual(originalCounts)
+    const followView = viewOf(viewerFollow)
+    for (const key of ['likeCount', 'repostCount', 'replyCount'])
+      expect(followView).not.toHaveProperty(key)
+  })
+
+  it('leaves counts out of the skeleton and returns the same subjects', async () => {
+    const viewer = did(),
+      author = did()
+    const viewerFollow = await follow(viewer, author)
+    const liked = await update(author)
+    await like(did(), { uri: liked, cid })
+    const skeleton = await new FeedService(registry).getFeedSkeleton(
+      request(viewer),
+    )
+    expect(skeleton.feed.map((item) => item.subject).sort()).toEqual(
+      [liked, viewerFollow].sort(),
+    )
+    for (const item of skeleton.feed)
+      expect(Object.keys(item)).toEqual(['subject'])
   })
 })

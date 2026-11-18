@@ -38,11 +38,20 @@ interface MaearthQueryRow extends QueryResultRow {
   readonly reposted_post_uri: string | null
   readonly followed_project_uri: string | null
   readonly followed_did: string | null
+  /** Null on follow items, and on every row of a skeleton (counts are not computed). */
+  readonly like_count: number | null
+  readonly repost_count: number | null
+  readonly reply_count: number | null
 }
 
 type RowTarget = Pick<
   MaearthFeedView,
   'repostedPostUri' | 'followedProjectUri' | 'followedDid'
+>
+
+type RowCounts = Pick<
+  MaearthFeedView,
+  'likeCount' | 'repostCount' | 'replyCount'
 >
 
 const POST_COLLECTION = 'org.hypercerts.context.attachment'
@@ -95,6 +104,36 @@ const rowTarget = (
     return {}
   throw new Error(
     "MaEarth query row has a target that does not match its kind: repost needs a valid reposted_post_uri, projectFollow a valid followed_project_uri, accountFollow a valid followed_did, post none, and no kind may carry another kind's target; correct the SQL projection before serving requests.",
+  )
+}
+
+const isCount = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+
+/**
+ * Posts and reposts carry all three counts, follows none. A violation is a SQL
+ * projection bug, so it fails the request like a mismatched target does.
+ */
+const rowCounts = (
+  kind: MaearthKind,
+  { like, repost, reply }: { like: unknown; repost: unknown; reply: unknown },
+): RowCounts => {
+  if (
+    (kind === 'post' || kind === 'repost') &&
+    isCount(like) &&
+    isCount(repost) &&
+    isCount(reply)
+  )
+    return { likeCount: like, repostCount: repost, replyCount: reply }
+  if (
+    (kind === 'projectFollow' || kind === 'accountFollow') &&
+    like === null &&
+    repost === null &&
+    reply === null
+  )
+    return {}
+  throw new Error(
+    'MaEarth query row has counts that do not match its kind: post and repost need non-negative integer like_count, repost_count and reply_count, follows need none; correct the SQL projection before serving requests.',
   )
 }
 
@@ -161,13 +200,15 @@ export const createMaearthFeed = (
       },
     },
     sql,
-    bind: ({ params, cursor, fetchLimit }) => [
+    // The last bind enables the count lookup, which only getFeed (with-source) needs.
+    bind: ({ params, cursor, mode, fetchLimit }) => [
       params.viewerDid,
       params.actorDid ?? null,
       params.kinds,
       cursor?.value ?? null,
       cursor?.uri ?? null,
       fetchLimit,
+      mode === 'with-source',
     ],
     cursor: timestampUriCursor,
     mapRow: (row, mode) => {
@@ -197,6 +238,11 @@ export const createMaearthFeed = (
         sortValue: row.sort_value,
       }
       if (mode === 'metadata') return metadata
+      const counts = rowCounts(row.kind, {
+        like: row.like_count,
+        repost: row.repost_count,
+        reply: row.reply_count,
+      })
       const view: MaearthFeedView = {
         $type: 'org.hypercerts.feed.defs#maearthFeedView',
         kind: row.kind,
@@ -204,12 +250,13 @@ export const createMaearthFeed = (
         cid: row.cid,
         actorDid: row.actor_did,
         ...target,
+        ...counts,
       }
       return { ...metadata, sourceValue: view }
     },
   })
 
-/** Projects same-statement merge metadata without identities, repost-target reads or hydration. */
+/** Projects same-statement merge metadata and counts without identities, repost-target reads or hydration. */
 export class MaearthFeedService {
   constructor(private readonly pages: FeedPageLoader) {}
 
@@ -239,6 +286,15 @@ export class MaearthFeedService {
         ...(parsed.followedDid === undefined
           ? {}
           : { followedDid: parsed.followedDid }),
+        ...(parsed.likeCount === undefined
+          ? {}
+          : { likeCount: parsed.likeCount }),
+        ...(parsed.repostCount === undefined
+          ? {}
+          : { repostCount: parsed.repostCount }),
+        ...(parsed.replyCount === undefined
+          ? {}
+          : { replyCount: parsed.replyCount }),
       }
       return { subject: row.uri, view }
     })

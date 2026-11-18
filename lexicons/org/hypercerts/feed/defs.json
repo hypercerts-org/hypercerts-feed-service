@@ -28,7 +28,7 @@
     "maearthFeedView": {
       "type": "object",
       "required": ["kind", "createdAt"],
-      "description": "Experimental merge metadata, not hydrated content. createdAt is the effective SQL sort timestamp, including indexed_at fallback; items dated more than five minutes after the database's statement time are not returned. MaEarth must apply privacy and content filtering.",
+      "description": "Experimental merge metadata, not hydrated content, plus engagement counts for post and repost items. createdAt is the effective SQL sort timestamp, including indexed_at fallback; items dated more than five minutes after the database's statement time are not returned. MaEarth must apply privacy and content filtering.",
       "properties": {
         "kind": {
           "type": "string",
@@ -60,6 +60,21 @@
           "type": "string",
           "format": "did",
           "description": "The followed account's DID, from the follow record's subject. Present only for accountFollow; the follower is the authority of the entry's subject URI."
+        },
+        "likeCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct accounts with a current like of the counted post. Present, possibly 0, only for post and repost items. A repost item counts its original post (repostedPostUri), not the repost record. A current count at response time, not a snapshot."
+        },
+        "repostCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct accounts with a current repost of the counted post. Present, possibly 0, only for post and repost items; counted post as for likeCount."
+        },
+        "replyCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of current direct replies to the counted post: comment attachments listing it in subjects. Every comment record counts, not distinct authors, and replies to replies are excluded. Present, possibly 0, only for post and repost items; counted post as for likeCount."
         }
       }
     },

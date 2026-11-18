@@ -19,7 +19,7 @@ export interface MaearthFeedParams {
   readonly kinds?: readonly string[]
 }
 
-/** Merge metadata only: MaEarth owns content hydration and visibility filtering. */
+/** Merge metadata and engagement counts: MaEarth owns content hydration and visibility filtering. */
 export interface MaearthFeedView {
   readonly $type: 'org.hypercerts.feed.defs#maearthFeedView'
   readonly kind: MaearthKind
@@ -33,6 +33,13 @@ export interface MaearthFeedView {
   readonly followedProjectUri?: string
   /** The followed account; present only for `accountFollow`. */
   readonly followedDid?: string
+  /**
+   * Counts of the item's post (a repost item counts its original post); present,
+   * possibly 0, on `post` and `repost` items and absent on follows.
+   */
+  readonly likeCount?: number
+  readonly repostCount?: number
+  readonly replyCount?: number
 }
 
 export const isMaearthKind = (kind: string): kind is MaearthKind =>

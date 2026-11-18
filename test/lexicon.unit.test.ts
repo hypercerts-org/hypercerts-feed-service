@@ -624,6 +624,8 @@ describe('MaEarth feed Lexicon contract', () => {
       // Older consumers and other kinds omit every target.
       { kind: 'projectFollow' },
       { kind: 'post' },
+      // Counts are optional, may be 0, and ride on any kind.
+      { kind: 'post', likeCount: 0, repostCount: 12, replyCount: 3 },
     ]) {
       expect(maearthFeedView.schema.$parse({ ...base, ...valid })).toEqual({
         ...base,
@@ -657,6 +659,9 @@ describe('MaEarth feed Lexicon contract', () => {
       // The parser's 2048-character DID cap is why the SQL guards the follow subject length.
       { kind: 'accountFollow', followedDid: `did:web:${'a'.repeat(2041)}` },
       { kind: 'accountFollow', followedDid: projectUri },
+      { kind: 'post', likeCount: -1 },
+      { kind: 'post', repostCount: 1.5 },
+      { kind: 'post', replyCount: '3' },
     ]) {
       expect(() =>
         maearthFeedView.schema.$parse({ ...base, ...invalid }),

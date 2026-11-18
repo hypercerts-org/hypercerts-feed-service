@@ -37,9 +37,13 @@ const repostRow = (overrides: Record<string, unknown> = {}) => ({
   reposted_post_uri: `at://${viewerDid}/org.hypercerts.context.attachment/post`,
   followed_project_uri: null,
   followed_did: null,
+  like_count: 3,
+  repost_count: 2,
+  reply_count: 1,
   ...overrides,
 })
 
+const noCounts = { like_count: null, repost_count: null, reply_count: null }
 const followedDid = 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb'
 const followedProject = `at://${followedDid}/org.hypercerts.collection/project`
 const projectFollowRow = (overrides: Record<string, unknown> = {}) =>
@@ -49,6 +53,7 @@ const projectFollowRow = (overrides: Record<string, unknown> = {}) =>
     kind: 'projectFollow',
     reposted_post_uri: null,
     followed_project_uri: followedProject,
+    ...noCounts,
     ...overrides,
   })
 const accountFollowRow = (overrides: Record<string, unknown> = {}) =>
@@ -58,6 +63,7 @@ const accountFollowRow = (overrides: Record<string, unknown> = {}) =>
     kind: 'accountFollow',
     reposted_post_uri: null,
     followed_did: followedDid,
+    ...noCounts,
     ...overrides,
   })
 
@@ -139,7 +145,7 @@ describe('MaEarth feed boundary', () => {
 })
 
 describe('MaEarth feed query contract', () => {
-  it('binds viewer, actor, kinds, cursor position and limit + 1 in SQL order with a default page size of 20', async () => {
+  it('binds viewer, actor, kinds, cursor position, limit + 1 and the count switch in SQL order with a default page size of 20', async () => {
     const { query, service } = setup()
     await service.getFeed(request)
     expect(query).toHaveBeenCalledTimes(1)
@@ -150,6 +156,21 @@ describe('MaEarth feed query contract', () => {
       null,
       null,
       21,
+      true,
+    ])
+  })
+
+  it('turns the count lookup off for the skeleton, which returns URIs only', async () => {
+    const { query, pages } = setup()
+    await new FeedService(pages).getFeedSkeleton(request)
+    expect(query.mock.calls[0]?.[1]).toEqual([
+      viewerDid,
+      null,
+      [],
+      null,
+      null,
+      21,
+      false,
     ])
   })
 
@@ -194,6 +215,7 @@ describe('MaEarth feed query contract', () => {
       rows[0]?.sort_value,
       rows[0]?.uri,
       6,
+      true,
     ])
   })
 
@@ -222,7 +244,7 @@ describe('MaEarth feed query contract', () => {
     await expect(service.getFeed(request)).rejects.toThrow()
   })
 
-  it('returns each follow kind with only its own target and keeps targets out of the skeleton', async () => {
+  it('returns each kind with only its own target and counts, and keeps both out of the skeleton', async () => {
     const { query, pages, service } = setup()
     const otherCid =
       'bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm'
@@ -277,6 +299,9 @@ describe('MaEarth feed query contract', () => {
           cid: recordCid,
           actorDid: viewerDid,
           repostedPostUri: rows[2]?.reposted_post_uri,
+          likeCount: 3,
+          repostCount: 2,
+          replyCount: 1,
         },
       },
       {
@@ -287,6 +312,9 @@ describe('MaEarth feed query contract', () => {
           createdAt,
           cid: recordCid,
           actorDid: viewerDid,
+          likeCount: 3,
+          repostCount: 2,
+          replyCount: 1,
         },
       },
     ])
@@ -387,5 +415,43 @@ describe('MaEarth feed query contract', () => {
     await expect(service.getFeed(request)).rejects.toThrow(
       /target that does not match its kind/,
     )
+  })
+})
+
+describe('MaEarth count projection', () => {
+  const countsError = /counts that do not match its kind/
+
+  it.each([
+    [
+      'a post without counts',
+      repostRow({ kind: 'post', reposted_post_uri: null, ...noCounts }),
+    ],
+    ['a repost without a reply count', repostRow({ reply_count: null })],
+    [
+      'a repost with a missing like count',
+      repostRow({ like_count: undefined }),
+    ],
+    ['a negative count', repostRow({ repost_count: -1 })],
+    ['a fractional count', repostRow({ like_count: 1.5 })],
+    [
+      'a count beyond the safe integer range',
+      repostRow({ reply_count: 2 ** 53 }),
+    ],
+    ['a count returned as text', repostRow({ like_count: '3' })],
+    ['a projectFollow with a count', projectFollowRow({ like_count: 0 })],
+    ['an accountFollow with a count', accountFollowRow({ reply_count: 1 })],
+  ])('fails closed on %s', async (_label, row) => {
+    const { query, service } = setup()
+    query.mockResolvedValue({ rows: [row] })
+    await expect(service.getFeed(request)).rejects.toThrow(countsError)
+  })
+
+  it('does not read counts for the skeleton, where the query returns none', async () => {
+    const { query, pages } = setup()
+    const row = repostRow(noCounts)
+    query.mockResolvedValue({ rows: [row] })
+    await expect(
+      new FeedService(pages).getFeedSkeleton(request),
+    ).resolves.toEqual({ feed: [{ subject: row.uri }] })
   })
 })

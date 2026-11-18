@@ -12,6 +12,7 @@ patterns AS NOT MATERIALIZED (
     'app.certified.graph.follow'::text AS follow_nsid,
     'app.certified.graph.entityFollow'::text AS entity_follow_nsid,
     'app.certified.feed.repost'::text AS repost_nsid,
+    'app.certified.feed.like'::text AS like_nsid,
     'org.hypercerts.collection'::text AS collection_nsid,
     -- The sort value is returned to clients and re-read as a cursor, so every
     -- effective timestamp must render as a valid four-digit-year atproto datetime.
@@ -296,9 +297,83 @@ paged AS (
     AND ($4::timestamptz IS NULL OR (effective_at, uri) < ($4::timestamptz, $5::text))
   ORDER BY effective_at DESC, uri DESC
   LIMIT $6::integer
+),
+-- The post whose counts an item carries: a post counts itself and a repost its
+-- original post. Follows have no counted post.
+page_targets AS (
+  SELECT paged.*,
+    CASE paged.kind
+      WHEN 'post' THEN paged.uri
+      WHEN 'repost' THEN paged.reposted_post_uri
+    END AS count_uri
+  FROM paged
+),
+-- Counts run after pagination, on the page's own rows only (at most limit + 1),
+-- and only when the caller asked for them ($7, getFeed): the skeleton skips them.
+count_targets AS MATERIALIZED (
+  SELECT DISTINCT count_uri AS uri
+  FROM page_targets
+  WHERE $7::boolean AND count_uri IS NOT NULL
+),
+-- Candidate reactions through happyview_record_refs (index on target_uri,
+-- collection), whose source collection is the referencing record's. A refs row
+-- exists for every at:// string in a record, not only the field that makes it a
+-- like, repost or reply, so each hit is re-checked against the decoded source
+-- record: a like that names the post only in `via`, or a comment on a comment,
+-- is not counted. The refs table must be complete; a missing row undercounts.
+reactions AS (
+  SELECT target.uri AS target_uri, source.uri AS source_uri, source.did,
+    CASE
+      WHEN source.collection = patterns.like_nsid
+        AND decoded.value->'subject'->>'uri' = target.uri THEN 'like'
+      WHEN source.collection = patterns.repost_nsid
+        AND decoded.value->'subject'->>'uri' = target.uri THEN 'repost'
+      WHEN source.collection = patterns.attachment_nsid
+        AND decoded.value->>'contentType' = 'comment'
+        AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(decoded.value->'subjects') = 'array'
+              THEN decoded.value->'subjects' ELSE '[]'::jsonb END
+          ) AS listed(value)
+          WHERE listed.value->>'uri' = target.uri
+        ) THEN 'reply'
+    END AS reaction
+  FROM count_targets AS target
+  CROSS JOIN patterns
+  JOIN happyview_record_refs AS ref
+    ON ref.target_uri = target.uri
+    AND ref.collection IN (
+      patterns.like_nsid, patterns.repost_nsid, patterns.attachment_nsid
+    )
+  JOIN happyview_records AS source
+    ON source.uri = ref.source_uri AND source.collection = ref.collection
+  CROSS JOIN LATERAL (
+    SELECT CASE WHEN pg_input_is_valid(source.record, 'jsonb')
+      THEN source.record::jsonb ELSE NULL::jsonb END AS value
+    OFFSET 0
+  ) AS decoded
+  WHERE decoded.value->>'$type' = source.collection
+),
+-- Likes and reposts count distinct accounts; every direct comment counts, as in
+-- the api.hypercerts.dev getReactionCounts and getCommentCounts endpoints.
+counts AS MATERIALIZED (
+  SELECT target_uri,
+    count(DISTINCT did) FILTER (WHERE reaction = 'like')::integer AS like_count,
+    count(DISTINCT did) FILTER (WHERE reaction = 'repost')::integer AS repost_count,
+    count(DISTINCT source_uri) FILTER (WHERE reaction = 'reply')::integer AS reply_count
+  FROM reactions
+  WHERE reaction IS NOT NULL
+  GROUP BY target_uri
 )
-SELECT uri, cid, collection, actor_did, kind, reposted_post_uri,
-  followed_project_uri, followed_did,
-  to_char(effective_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_value
-FROM paged
-ORDER BY effective_at DESC, uri DESC
+SELECT item.uri, item.cid, item.collection, item.actor_did, item.kind,
+  item.reposted_post_uri, item.followed_project_uri, item.followed_did,
+  to_char(item.effective_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_value,
+  CASE WHEN $7::boolean AND item.count_uri IS NOT NULL
+    THEN COALESCE(counts.like_count, 0) END AS like_count,
+  CASE WHEN $7::boolean AND item.count_uri IS NOT NULL
+    THEN COALESCE(counts.repost_count, 0) END AS repost_count,
+  CASE WHEN $7::boolean AND item.count_uri IS NOT NULL
+    THEN COALESCE(counts.reply_count, 0) END AS reply_count
+FROM page_targets AS item
+LEFT JOIN counts ON counts.target_uri = item.count_uri
+ORDER BY item.effective_at DESC, item.uri DESC
