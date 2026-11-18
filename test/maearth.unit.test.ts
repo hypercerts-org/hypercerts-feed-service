@@ -38,6 +38,7 @@ const repostRow = (overrides: Record<string, unknown> = {}) => ({
   // The record's own text, deliberately not the sort time's form: it must pass through unchanged.
   record_created_at: recordCreatedAt,
   reposted_post_uri: `at://${viewerDid}/org.hypercerts.context.attachment/post`,
+  reposted_post_cid: recordCid,
   followed_project_uri: null,
   followed_did: null,
   like_count: 3,
@@ -53,8 +54,9 @@ const projectFollowRow = (overrides: Record<string, unknown> = {}) =>
   repostRow({
     uri: `at://${viewerDid}/app.certified.graph.entityFollow/one`,
     collection: 'app.certified.graph.entityFollow',
-    kind: 'projectFollow',
+    kind: 'project-follow',
     reposted_post_uri: null,
+    reposted_post_cid: null,
     followed_project_uri: followedProject,
     ...noCounts,
     ...overrides,
@@ -63,8 +65,9 @@ const accountFollowRow = (overrides: Record<string, unknown> = {}) =>
   repostRow({
     uri: `at://${viewerDid}/app.certified.graph.follow/one`,
     collection: 'app.certified.graph.follow',
-    kind: 'accountFollow',
+    kind: 'account-follow',
     reposted_post_uri: null,
+    reposted_post_cid: null,
     followed_did: followedDid,
     ...noCounts,
     ...overrides,
@@ -74,14 +77,22 @@ const decodeCursorPayload = (cursor: string): unknown =>
   JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
 
 describe('MaEarth feed boundary', () => {
-  it('rejects unsupported kinds and out-of-range pagination before querying', async () => {
+  it('rejects unsupported and former camelCase kinds and out-of-range pagination before querying', async () => {
     const { query, service } = setup()
-    await expect(
-      service.getFeed({
-        ...request,
-        params: { ...request.params, kinds: ['donation'] },
-      }),
-    ).rejects.toMatchObject({ code: 'InvalidRequest', status: 422 })
+    for (const kind of ['donation', 'post', 'projectFollow', 'accountFollow']) {
+      await expect(
+        service.getFeed({
+          ...request,
+          params: { ...request.params, kinds: [kind] },
+        }),
+      ).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        status: 422,
+        message: expect.stringContaining(
+          'use update, repost, project-follow, account-follow',
+        ) as unknown,
+      })
+    }
     for (const limit of [0, 51]) {
       await expect(
         service.getFeed({ ...request, limit }),
@@ -188,7 +199,7 @@ describe('MaEarth feed query contract', () => {
     ]
     query.mockResolvedValueOnce({ rows })
     const page = await service.getFeed({ ...request, limit: 1 })
-    expect(page.feed.map((item) => item.subject)).toEqual([rows[0]?.uri])
+    expect(page.feed.map((item) => item.uri)).toEqual([rows[0]?.uri])
     if (page.cursor === undefined) throw new Error('Expected a cursor')
     expect(decodeCursorPayload(page.cursor)).toEqual({
       version: 1,
@@ -206,7 +217,7 @@ describe('MaEarth feed query contract', () => {
       params: {
         ...request.params,
         actorDid: 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
-        kinds: ['post', 'repost', 'post'],
+        kinds: ['update', 'repost', 'update'],
       },
       limit: 5,
       cursor: page.cursor,
@@ -214,7 +225,7 @@ describe('MaEarth feed query contract', () => {
     expect(query.mock.calls[2]?.[1]).toEqual([
       viewerDid,
       'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
-      ['post', 'repost'],
+      ['update', 'repost'],
       rows[0]?.sort_value,
       rows[0]?.uri,
       6,
@@ -261,11 +272,11 @@ describe('MaEarth feed query contract', () => {
       })
       const { feed } = await service.getFeed(request)
       expect(feed).toHaveLength(1)
-      expect(feed[0]?.view).not.toHaveProperty('createdAt')
+      expect(feed[0]).not.toHaveProperty('createdAt')
     },
   )
 
-  it("returns an actor on every kind and only each kind's own target and counts, and keeps them out of the skeleton", async () => {
+  it("returns each kind's flat item with its own subject, puts a repost's counts on its subject, and keeps them out of the skeleton", async () => {
     const { query, pages, service } = setup()
     const otherCid =
       'bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm'
@@ -281,98 +292,125 @@ describe('MaEarth feed query contract', () => {
       repostRow({
         uri: `at://${viewerDid}/org.hypercerts.context.attachment/post`,
         collection: 'org.hypercerts.context.attachment',
-        kind: 'post',
+        kind: 'update',
         reposted_post_uri: null,
+        reposted_post_cid: null,
       }),
     ]
     query.mockResolvedValue({ rows })
-    const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
+    const sortAt = '2026-10-14T12:00:00.123456Z'
+    // The record's own value passes through unchanged; sortAt is the value the cursor encodes.
     const createdAt = recordCreatedAt
     expect((await service.getFeed(request)).feed).toEqual([
       {
-        subject: rows[0]?.uri,
-        view: {
-          $type: viewType,
-          kind: 'projectFollow',
-          createdAt,
-          cid: recordCid,
-          actor: { did: viewerDid },
-          target: { uri: followedProject },
+        uri: rows[0]?.uri,
+        cid: recordCid,
+        author: { did: viewerDid },
+        kind: 'project-follow',
+        sortAt,
+        createdAt,
+        // An entity follow's subject names no CID.
+        subject: {
+          $type: 'org.hypercerts.feed.defs#recordView',
+          uri: followedProject,
         },
       },
       {
-        subject: rows[1]?.uri,
-        view: {
-          $type: viewType,
-          kind: 'accountFollow',
-          createdAt,
-          cid: otherCid,
-          actor: { did: followedDid },
-          target: { did: viewerDid },
+        uri: rows[1]?.uri,
+        cid: otherCid,
+        author: { did: followedDid },
+        kind: 'account-follow',
+        sortAt,
+        createdAt,
+        subject: {
+          $type: 'org.hypercerts.feed.defs#actorView',
+          did: viewerDid,
         },
       },
       {
-        subject: rows[2]?.uri,
-        view: {
-          $type: viewType,
-          kind: 'repost',
-          createdAt,
+        uri: rows[2]?.uri,
+        cid: recordCid,
+        author: { did: viewerDid },
+        kind: 'repost',
+        sortAt,
+        createdAt,
+        // The numbers describe the original post, so they sit on the subject, not the repost.
+        subject: {
+          $type: 'org.hypercerts.feed.defs#recordView',
+          uri: rows[2]?.reposted_post_uri,
           cid: recordCid,
-          actor: { did: viewerDid },
-          target: { uri: rows[2]?.reposted_post_uri },
           likeCount: 3,
           repostCount: 2,
           replyCount: 1,
         },
       },
       {
-        subject: rows[3]?.uri,
-        view: {
-          $type: viewType,
-          kind: 'post',
-          createdAt,
-          cid: recordCid,
-          actor: { did: viewerDid },
-          likeCount: 3,
-          repostCount: 2,
-          replyCount: 1,
-        },
+        uri: rows[3]?.uri,
+        cid: recordCid,
+        author: { did: viewerDid },
+        kind: 'update',
+        sortAt,
+        createdAt,
+        likeCount: 3,
+        repostCount: 2,
+        replyCount: 1,
       },
     ])
     expect(await new FeedService(pages).getFeedSkeleton(request)).toEqual({
-      feed: rows.map((row) => ({ subject: row.uri })),
+      feed: rows.map((row) => ({ uri: row.uri })),
     })
   })
 
   it.each([
+    // The query returns null for a value over its length bound.
+    ['null', null],
+    ['not a CID', 'yesterday'],
+  ])(
+    "omits the repost subject's cid instead of failing the page when it is %s",
+    async (_label, value) => {
+      const { query, service } = setup()
+      query.mockResolvedValue({
+        rows: [repostRow({ reposted_post_cid: value })],
+      })
+      const { feed } = await service.getFeed(request)
+      expect(feed).toHaveLength(1)
+      expect(feed[0]?.subject).toMatchObject({
+        $type: 'org.hypercerts.feed.defs#recordView',
+        likeCount: 3,
+      })
+      expect(feed[0]?.subject).not.toHaveProperty('cid')
+    },
+  )
+
+  it.each([
     [
-      'a projectFollow without a target',
+      'a project-follow without a target',
       projectFollowRow({ followed_project_uri: null }),
     ],
     [
-      'a projectFollow with a malformed URI',
+      'a project-follow with a malformed URI',
       projectFollowRow({ followed_project_uri: 'not-a-uri' }),
     ],
     [
-      'a projectFollow targeting another collection',
+      'a project-follow targeting another collection',
       projectFollowRow({
         followed_project_uri: `at://${followedDid}/org.hypercerts.claim.activity/activity`,
       }),
     ],
     [
-      'a projectFollow also carrying a DID',
+      'a project-follow also carrying a DID',
       projectFollowRow({ followed_did: followedDid }),
     ],
     [
-      'an accountFollow without a target',
+      'an account-follow without a target',
       accountFollowRow({ followed_did: null }),
     ],
     [
-      'an accountFollow with a malformed DID',
+      'an account-follow with a malformed DID',
       accountFollowRow({ followed_did: 'not-a-did' }),
     ],
     [
-      'an accountFollow also carrying a project URI',
+      'an account-follow also carrying a project URI',
       accountFollowRow({ followed_project_uri: followedProject }),
     ],
     [
@@ -381,10 +419,11 @@ describe('MaEarth feed query contract', () => {
     ],
     ['a repost carrying a DID', repostRow({ followed_did: followedDid })],
     [
-      'a post carrying a DID',
+      'an update carrying a DID',
       repostRow({
-        kind: 'post',
+        kind: 'update',
         reposted_post_uri: null,
+        reposted_post_cid: null,
         followed_did: followedDid,
       }),
     ],
@@ -410,23 +449,36 @@ describe('MaEarth feed query contract', () => {
       repostRow({ reposted_post_uri: followedProject }),
     ],
     [
-      'a post carrying a repost target',
+      'an update carrying a repost CID',
       repostRow({
-        kind: 'post',
+        kind: 'update',
+        reposted_post_uri: null,
+        followed_did: null,
+      }),
+    ],
+    [
+      'an update carrying a repost target',
+      repostRow({
+        kind: 'update',
         reposted_post_uri: `at://${followedDid}/org.hypercerts.context.attachment/post`,
       }),
     ],
     [
-      'a projectFollow carrying a repost target',
+      'an account-follow carrying a repost CID',
+      accountFollowRow({ reposted_post_cid: recordCid }),
+    ],
+    [
+      'a project-follow carrying a repost target',
       projectFollowRow({
         reposted_post_uri: `at://${followedDid}/org.hypercerts.context.attachment/post`,
       }),
     ],
     [
-      'a post with a missing target column',
+      'an update with a missing target column',
       repostRow({
-        kind: 'post',
+        kind: 'update',
         reposted_post_uri: null,
+        reposted_post_cid: null,
         followed_did: undefined,
       }),
     ],
@@ -434,7 +486,7 @@ describe('MaEarth feed query contract', () => {
     const { query, service } = setup()
     query.mockResolvedValue({ rows: [row] })
     await expect(service.getFeed(request)).rejects.toThrow(
-      /target that does not match its kind/,
+      /subject that does not match its kind/,
     )
   })
 })
@@ -444,8 +496,13 @@ describe('MaEarth count projection', () => {
 
   it.each([
     [
-      'a post without counts',
-      repostRow({ kind: 'post', reposted_post_uri: null, ...noCounts }),
+      'an update without counts',
+      repostRow({
+        kind: 'update',
+        reposted_post_uri: null,
+        reposted_post_cid: null,
+        ...noCounts,
+      }),
     ],
     ['a repost without a reply count', repostRow({ reply_count: null })],
     [
@@ -459,8 +516,8 @@ describe('MaEarth count projection', () => {
       repostRow({ reply_count: 2 ** 53 }),
     ],
     ['a count returned as text', repostRow({ like_count: '3' })],
-    ['a projectFollow with a count', projectFollowRow({ like_count: 0 })],
-    ['an accountFollow with a count', accountFollowRow({ reply_count: 1 })],
+    ['a project-follow with a count', projectFollowRow({ like_count: 0 })],
+    ['an account-follow with a count', accountFollowRow({ reply_count: 1 })],
   ])('fails closed on %s', async (_label, row) => {
     const { query, service } = setup()
     query.mockResolvedValue({ rows: [row] })
@@ -473,6 +530,6 @@ describe('MaEarth count projection', () => {
     query.mockResolvedValue({ rows: [row] })
     await expect(
       new FeedService(pages).getFeedSkeleton(request),
-    ).resolves.toEqual({ feed: [{ subject: row.uri }] })
+    ).resolves.toEqual({ feed: [{ uri: row.uri }] })
   })
 })

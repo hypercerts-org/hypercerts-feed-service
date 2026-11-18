@@ -7,11 +7,11 @@ import { createMaearthFeed, MaearthFeedService } from '../src/feed/maearth.js'
 import {
   MAEARTH_FEED_ID,
   MAEARTH_FEED_PARAMS_TYPE,
-  type MaearthFeedView,
 } from '../src/feed/maearth-types.js'
 import { FeedRegistry } from '../src/feed/registry.js'
 import { FeedService } from '../src/feed/service.js'
 import type { GetFeedSkeletonInput } from '../src/feed/types.js'
+import type { ItemView } from '../src/hydration/types.js'
 import { Metrics } from '../src/metrics.js'
 
 const connectionString = process.env.TEST_DATABASE_URL
@@ -37,7 +37,10 @@ const recordSubject = (uri: string) => ({
   uri,
 })
 const cid = 'bafyreia3tbsfxe3cc75xrxyyn6qc42oupi73fxiox76prlyi5bpx7hr72u'
-const viewType = 'org.hypercerts.feed.defs#maearthFeedView'
+// What a repost record names for its post: deliberately not the repost's own CID.
+const subjectCid = 'bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm'
+const recordViewType = 'org.hypercerts.feed.defs#recordView'
+const actorViewType = 'org.hypercerts.feed.defs#actorView'
 /** The DID authority of a record URI, which is the item's actor. */
 const authorOf = (uri: string) => uri.split('/')[2]
 
@@ -165,18 +168,17 @@ const request = (
   ...(extra.limit === undefined ? {} : { limit: extra.limit }),
   ...(extra.cursor === undefined ? {} : { cursor: extra.cursor }),
 })
-const subjects = async (
+const uris = async (
   viewerDid: string,
   extra: Parameters<typeof request>[1] = {},
 ) =>
   (await service.getFeed(request(viewerDid, extra))).feed
-    .map((item) => item.subject)
+    .map((item) => item.uri)
     .sort()
 
 interface CollectedItem {
-  readonly subject: string
+  readonly uri: string
   readonly kind: string
-  /** The effective sort timestamp, which getFeed views do not expose. */
   readonly sortValue: string
 }
 
@@ -184,9 +186,9 @@ const minutesFromNow = (minutes: number) =>
   new Date(Date.now() + minutes * 60_000).toISOString()
 
 /**
- * Follows cursors to the end through the registry's page boundary, which still
- * carries each row's sort value (views expose the record's own createdAt
- * instead). The cap turns a non-terminating cursor into a failure.
+ * Follows cursors to the end through the registry's page boundary, which carries
+ * each row's sort value as the cursor encodes it. The cap turns a
+ * non-terminating cursor into a failure.
  */
 const collect = async (
   viewerDid: string,
@@ -205,7 +207,7 @@ const collect = async (
     )
     items.push(
       ...page.rows.map(({ uri, kind, sortValue }) => ({
-        subject: uri,
+        uri,
         kind,
         sortValue,
       })),
@@ -253,8 +255,8 @@ describe('MaEarth Following SQL', () => {
     })
     await update(stranger, { subjects: 'not-an-array' })
     await update(author, { contentType: 'report' })
-    const page = await service.getFeed(request(viewer, { kinds: ['post'] }))
-    expect(page.feed.map((item) => item.subject).sort()).toEqual(
+    const page = await service.getFeed(request(viewer, { kinds: ['update'] }))
+    expect(page.feed.map((item) => item.uri).sort()).toEqual(
       [own, followed, about].sort(),
     )
   })
@@ -278,37 +280,35 @@ describe('MaEarth Following SQL', () => {
     })
     await entityFollow(stranger, project(stranger))
     const page = await service.getFeed(
-      request(viewer, { kinds: ['accountFollow', 'projectFollow'] }),
+      request(viewer, { kinds: ['account-follow', 'project-follow'] }),
     )
-    // The record's own createdAt, as seeded (not the sort time's microsecond form).
+    // The record's own createdAt, as seeded; sortAt is the same instant in the cursor's form.
     const createdAt = '2026-10-14T12:00:00Z'
-    const account = (subject: string, followedDid: string) => ({
-      subject,
-      view: {
-        $type: viewType,
-        kind: 'accountFollow',
-        createdAt,
-        cid,
-        actor: { did: authorOf(subject) },
-        target: { did: followedDid },
-      },
+    const sortAt = '2026-10-14T12:00:00.000000Z'
+    const account = (uri: string, followedDid: string) => ({
+      uri,
+      cid,
+      author: { did: authorOf(uri) },
+      kind: 'account-follow',
+      sortAt,
+      createdAt,
+      subject: { $type: actorViewType, did: followedDid },
     })
-    const entity = (subject: string, followedProjectUri: string) => ({
-      subject,
-      view: {
-        $type: viewType,
-        kind: 'projectFollow',
-        createdAt,
-        cid,
-        actor: { did: authorOf(subject) },
-        target: { uri: followedProjectUri },
-      },
+    const entity = (uri: string, followedProjectUri: string) => ({
+      uri,
+      cid,
+      author: { did: authorOf(uri) },
+      kind: 'project-follow',
+      sortAt,
+      createdAt,
+      // An entity follow's subject names no CID, and a follow has no counts.
+      subject: { $type: recordViewType, uri: followedProjectUri },
     })
-    const bySubject = (left: { subject: string }, right: { subject: string }) =>
-      left.subject.localeCompare(right.subject)
-    // The follower is the subject URI's authority; each item names only the
+    const byUri = (left: { uri: string }, right: { uri: string }) =>
+      left.uri.localeCompare(right.uri)
+    // The follower is the item URI's authority; the subject names only the
     // followed target, so a stranger's follow of `author` names `author`.
-    expect([...page.feed].sort(bySubject)).toEqual(
+    expect([...page.feed].sort(byUri)).toEqual(
       [
         account(viewerFollow, author),
         entity(viewerProject, project(target)),
@@ -316,7 +316,7 @@ describe('MaEarth Following SQL', () => {
         account(aboutAuthor, author),
         entity(projectByAuthor, project(stranger)),
         entity(aboutProject, project(target)),
-      ].sort(bySubject),
+      ].sort(byUri),
     )
   })
 
@@ -326,7 +326,7 @@ describe('MaEarth Following SQL', () => {
       stranger = did()
     await follow(viewer, author)
     const target = post(stranger)
-    const included = await repost(author, { uri: target, cid })
+    const included = await repost(author, { uri: target, cid: subjectCid })
     await repost(stranger, { uri: target, cid })
     await repost(viewer, { uri: target, cid })
     await repost(author, { uri: project(stranger), cid })
@@ -336,14 +336,18 @@ describe('MaEarth Following SQL', () => {
       (await service.getFeed(request(viewer, { kinds: ['repost'] }))).feed,
     ).toEqual([
       {
-        subject: included,
-        view: {
-          $type: 'org.hypercerts.feed.defs#maearthFeedView',
-          kind: 'repost',
-          createdAt: '2026-10-14T12:00:00Z',
-          cid,
-          actor: { did: author },
-          target: { uri: target },
+        uri: included,
+        cid,
+        author: { did: author },
+        kind: 'repost',
+        sortAt: '2026-10-14T12:00:00.000000Z',
+        createdAt: '2026-10-14T12:00:00Z',
+        // The original post, with the CID the repost names for it and the post's
+        // counts. The repost item itself has no counts.
+        subject: {
+          $type: recordViewType,
+          uri: target,
+          cid: subjectCid,
           likeCount: 0,
           // Distinct reposters: author (three records, CID ignored), stranger, viewer.
           repostCount: 3,
@@ -351,6 +355,35 @@ describe('MaEarth Following SQL', () => {
         },
       },
     ])
+  })
+
+  it('returns the CID a repost names for its post, and omits one that is not a CID or is overlong instead of failing the page', async () => {
+    const viewer = did(),
+      author = did(),
+      stranger = did()
+    await follow(viewer, author)
+    const named = await repost(author, {
+      uri: post(stranger, 'a'),
+      cid: subjectCid,
+    })
+    const notACid = await repost(author, {
+      uri: post(stranger, 'b'),
+      cid: 'not-a-cid',
+    })
+    const overlong = await repost(author, {
+      uri: post(stranger, 'c'),
+      cid: 'b'.repeat(300),
+    })
+    const { feed } = await service.getFeed(
+      request(viewer, { kinds: ['repost'], limit: 50 }),
+    )
+    const subjectOf = (uri: string) =>
+      feed.find((item) => item.uri === uri)?.subject
+    expect(subjectOf(named)).toMatchObject({ cid: subjectCid })
+    for (const uri of [notACid, overlong]) {
+      expect(subjectOf(uri)).toMatchObject({ $type: recordViewType })
+      expect(subjectOf(uri)).not.toHaveProperty('cid')
+    }
   })
 
   it('excludes reposts whose target URI would fail output validation instead of failing the page', async () => {
@@ -376,7 +409,7 @@ describe('MaEarth Following SQL', () => {
     const items = await service.getFeed(
       request(viewer, { kinds: ['repost'], limit: 50 }),
     )
-    expect(items.feed.map((item) => item.subject).sort()).toEqual(
+    expect(items.feed.map((item) => item.uri).sort()).toEqual(
       [valid, longestKey, longestAuthority].sort(),
     )
   })
@@ -414,8 +447,8 @@ describe('MaEarth Following SQL', () => {
       'UPDATE happyview_records SET record = $1 WHERE uri = $2',
       ['{invalid', malformed],
     )
-    const items = await collect(viewer, { kinds: ['post'], limit: 1 })
-    expect(items.map((item) => item.subject)).toEqual([
+    const items = await collect(viewer, { kinds: ['update'], limit: 1 })
+    expect(items.map((item) => item.uri)).toEqual([
       ...[valid, tie].sort().reverse(),
       fallback,
       impossible,
@@ -434,9 +467,9 @@ describe('MaEarth Following SQL', () => {
       expected.push(await update(author))
     }
 
-    const actual = (await collect(viewer, { kinds: ['post'], limit: 50 })).map(
-      (item) => item.subject,
-    )
+    const actual = (
+      await collect(viewer, { kinds: ['update'], limit: 50 })
+    ).map((item) => item.uri)
     expect(actual.sort()).toEqual(expected.sort())
   })
 })
@@ -471,12 +504,10 @@ describe('MaEarth project resolution', () => {
     for (const uri of kept)
       posts.set(uri, await update(owner, { subjects: [{ uri, cid }] }))
 
-    expect(await subjects(viewer, { kinds: ['projectFollow'] })).toEqual(
+    expect(await uris(viewer, { kinds: ['project-follow'] })).toEqual(
       [edges.get(real), strangerEdges.get(real)].sort(),
     )
-    expect(await subjects(viewer, { kinds: ['post'] })).toEqual([
-      posts.get(real),
-    ])
+    expect(await uris(viewer, { kinds: ['update'] })).toEqual([posts.get(real)])
   })
 
   it('requires an authored entity follow by a followed account to resolve to a project too', async () => {
@@ -489,7 +520,7 @@ describe('MaEarth project resolution', () => {
     const included = await entityFollow(author, project(owner, 'real'))
     await entityFollow(author, project(owner, 'portfolio'))
     await entityFollow(author, project(owner, 'never-stored'))
-    expect(await subjects(viewer, { kinds: ['projectFollow'] })).toEqual([
+    expect(await uris(viewer, { kinds: ['project-follow'] })).toEqual([
       included,
     ])
   })
@@ -539,7 +570,7 @@ describe('MaEarth project resolution', () => {
     await update(author, { subjects: [{ uri: favoritesActivity, cid }] })
     await update(author, { subjects: [{ uri: 'not-a-uri', cid }] })
 
-    expect(await subjects(viewer, { kinds: ['post'] })).toEqual(
+    expect(await uris(viewer, { kinds: ['update'] })).toEqual(
       [byActivity, byCollection, mixed].sort(),
     )
 
@@ -557,7 +588,7 @@ describe('MaEarth project resolution', () => {
         collectionUri,
       ],
     )
-    expect(await subjects(viewer, { kinds: ['post'] })).toEqual(
+    expect(await uris(viewer, { kinds: ['update'] })).toEqual(
       [byCollection, mixed, byUnlisted].sort(),
     )
   })
@@ -591,24 +622,24 @@ describe('MaEarth author-driven and target-driven rows', () => {
       createdAt: '2026-10-14T12:00:00Z',
     })
     const expected = [own, byCollection, byActivity, strangerPost]
-    expect(await subjects(viewer, { kinds: ['post'] })).toEqual(
+    expect(await uris(viewer, { kinds: ['update'] })).toEqual(
       [...expected].sort(),
     )
     for (const limit of [1, 3]) {
       expect(
-        (await collect(viewer, { kinds: ['post'], limit })).map(
-          (item) => item.subject,
+        (await collect(viewer, { kinds: ['update'], limit })).map(
+          (item) => item.uri,
         ),
       ).toEqual(expected)
     }
-    expect(
-      await subjects(viewer, { kinds: ['post'], actorDid: author }),
-    ).toEqual([byCollection, byActivity].sort())
+    expect(await uris(viewer, { kinds: ['update'], actorDid: author })).toEqual(
+      [byCollection, byActivity].sort(),
+    )
   })
 })
 
 describe('MaEarth mediated and null-via follows', () => {
-  it('ignores mediated entity follows for viewer scope and for projectFollow items', async () => {
+  it('ignores mediated entity follows for viewer scope and for project-follow items', async () => {
     const viewer = did(),
       author = did(),
       owner = did(),
@@ -634,11 +665,11 @@ describe('MaEarth mediated and null-via follows', () => {
     await update(stranger, {
       subjects: [{ uri: project(owner, 'mediated'), cid }],
     })
-    expect(await subjects(viewer, { kinds: ['projectFollow'] })).toEqual(
+    expect(await uris(viewer, { kinds: ['project-follow'] })).toEqual(
       [direct, authorDirect, strangerDirect].sort(),
     )
-    expect(await subjects(viewer, { kinds: ['post'] })).toEqual([])
-    expect(await subjects(viewer, { kinds: ['accountFollow'] })).toEqual([
+    expect(await uris(viewer, { kinds: ['update'] })).toEqual([])
+    expect(await uris(viewer, { kinds: ['account-follow'] })).toEqual([
       viewerFollow,
     ])
   })
@@ -661,7 +692,7 @@ describe('MaEarth mediated and null-via follows', () => {
     const strangerEntity = await entityFollow(stranger, project(owner), {
       via: null,
     })
-    expect(await subjects(viewer)).toEqual(
+    expect(await uris(viewer)).toEqual(
       [
         viewerFollow,
         viewerEntity,
@@ -691,7 +722,7 @@ describe('MaEarth record shape and filters', () => {
     })
     await update(owner, { subjects: [{ uri: project(owner), cid }] })
     const kept = await update(trusted)
-    expect(await subjects(viewer, { kinds: ['post'] })).toEqual([kept])
+    expect(await uris(viewer, { kinds: ['update'] })).toEqual([kept])
   })
 
   it('applies actorDid to follow and repost kinds within viewer scope', async () => {
@@ -706,27 +737,27 @@ describe('MaEarth record shape and filters', () => {
     const firstRepost = await repost(first, { uri: post(target), cid })
     const secondRepost = await repost(second, { uri: post(target), cid })
     expect(
-      await subjects(viewer, {
-        kinds: ['accountFollow'],
+      await uris(viewer, {
+        kinds: ['account-follow'],
         actorDid: first,
       }),
     ).toEqual([firstFollow])
+    expect(await uris(viewer, { kinds: ['repost'], actorDid: second })).toEqual(
+      [secondRepost],
+    )
     expect(
-      await subjects(viewer, { kinds: ['repost'], actorDid: second }),
-    ).toEqual([secondRepost])
-    expect(
-      await subjects(viewer, {
-        kinds: ['accountFollow', 'repost'],
+      await uris(viewer, {
+        kinds: ['account-follow', 'repost'],
         actorDid: first,
       }),
     ).toEqual([firstFollow, firstRepost].sort())
-    expect(await subjects(viewer, { kinds: ['repost'] })).toEqual(
+    expect(await uris(viewer, { kinds: ['repost'] })).toEqual(
       [firstRepost, secondRepost].sort(),
     )
     // A stranger outside the graph yields nothing, even by explicit actorDid.
-    expect(
-      await subjects(viewer, { actorDid: did(), kinds: ['repost'] }),
-    ).toEqual([])
+    expect(await uris(viewer, { actorDid: did(), kinds: ['repost'] })).toEqual(
+      [],
+    )
   })
 
   it('returns an actor-restricted page for an author outside the followed graph', async () => {
@@ -739,7 +770,7 @@ describe('MaEarth record shape and filters', () => {
       subjects: [{ uri: project(followedProject), cid }],
     })
     await update(did(), { subjects: [{ uri: project(followedProject), cid }] })
-    expect(await subjects(viewer, { actorDid: stranger })).toEqual([about])
+    expect(await uris(viewer, { actorDid: stranger })).toEqual([about])
   })
 
   it('pages a mixed-kind feed with distinct timestamps, with and without kinds and cursor', async () => {
@@ -775,14 +806,14 @@ describe('MaEarth record shape and filters', () => {
       viewerProject,
     ]
     const all = await collect(viewer, { limit: 2 })
-    expect(all.map((item) => item.subject)).toEqual(expected)
+    expect(all.map((item) => item.uri)).toEqual(expected)
     expect(all.map((item) => item.kind)).toEqual([
-      'post',
-      'accountFollow',
-      'projectFollow',
+      'update',
+      'account-follow',
+      'project-follow',
       'repost',
-      'accountFollow',
-      'projectFollow',
+      'account-follow',
+      'project-follow',
     ])
     expect(all.map((item) => item.sortValue)).toEqual([
       '2026-10-14T12:05:00.000000Z',
@@ -793,13 +824,13 @@ describe('MaEarth record shape and filters', () => {
       '2026-10-14T12:00:30.000000Z',
     ])
     expect(
-      (await collect(viewer, { kinds: ['post', 'repost'], limit: 1 })).map(
-        (item) => item.subject,
+      (await collect(viewer, { kinds: ['update', 'repost'], limit: 1 })).map(
+        (item) => item.uri,
       ),
     ).toEqual([authored, reposted])
     expect(
-      (await collect(viewer, { kinds: ['accountFollow'], limit: 1 })).map(
-        (item) => item.subject,
+      (await collect(viewer, { kinds: ['account-follow'], limit: 1 })).map(
+        (item) => item.uri,
       ),
     ).toEqual([authorFollow, viewerFollow])
   })
@@ -811,9 +842,9 @@ describe('MaEarth record shape and filters', () => {
     await update(stranger)
     await follow(stranger, viewer)
     await repost(stranger, { uri: post(viewer), cid })
-    expect(await subjects(viewer)).toEqual([own])
-    expect(await subjects(viewer, { kinds: ['repost'] })).toEqual([])
-    expect(await subjects(viewer, { kinds: ['projectFollow'] })).toEqual([])
+    expect(await uris(viewer)).toEqual([own])
+    expect(await uris(viewer, { kinds: ['repost'] })).toEqual([])
+    expect(await uris(viewer, { kinds: ['project-follow'] })).toEqual([])
   })
 })
 
@@ -824,7 +855,7 @@ describe('MaEarth follow targets', () => {
     const viewerFollow = await follow(viewer, author)
     const kept = await follow(author, did())
     await follow(author, `did:web:${'a'.repeat(2041)}`)
-    expect(await subjects(viewer, { kinds: ['accountFollow'] })).toEqual(
+    expect(await uris(viewer, { kinds: ['account-follow'] })).toEqual(
       [viewerFollow, kept].sort(),
     )
   })
@@ -854,8 +885,8 @@ describe('MaEarth effective timestamp range', () => {
       .sort()
       .reverse()
 
-    const items = await collect(viewer, { kinds: ['post'], limit: 1 })
-    expect(items.map((item) => item.subject)).toEqual([earlyOffset, ...edgeMin])
+    const items = await collect(viewer, { kinds: ['update'], limit: 1 })
+    expect(items.map((item) => item.uri)).toEqual([earlyOffset, ...edgeMin])
     expect(items.map((item) => item.sortValue)).toEqual([
       '2026-10-14T11:00:00.000000Z',
       '0001-01-01T00:00:00.000000Z',
@@ -863,10 +894,10 @@ describe('MaEarth effective timestamp range', () => {
     ])
     // Larger pages must agree with single-item pages.
     expect(
-      (await collect(viewer, { kinds: ['post'], limit: 3 })).map(
-        (item) => item.subject,
+      (await collect(viewer, { kinds: ['update'], limit: 3 })).map(
+        (item) => item.uri,
       ),
-    ).toEqual(items.map((item) => item.subject))
+    ).toEqual(items.map((item) => item.uri))
   })
 })
 
@@ -880,11 +911,11 @@ describe('MaEarth future-dated items', () => {
     await update(author, { createdAt: '2099-06-01T00:00:00Z' })
     const past = await update(author, { createdAt: minutesFromNow(-10) })
     expect(
-      (await collect(viewer, { kinds: ['post'], limit: 1 })).map(
-        (item) => item.subject,
+      (await collect(viewer, { kinds: ['update'], limit: 1 })).map(
+        (item) => item.uri,
       ),
     ).toEqual([withinSkew, past])
-    expect(await subjects(viewer, { kinds: ['post'] })).toEqual(
+    expect(await uris(viewer, { kinds: ['update'] })).toEqual(
       [withinSkew, past].sort(),
     )
   })
@@ -918,7 +949,7 @@ describe('MaEarth future-dated items', () => {
       { createdAt: 'invalid' },
       { ...past, key: 'control' },
     )
-    expect(await subjects(viewer, { kinds: ['post'] })).toEqual([control])
+    expect(await uris(viewer, { kinds: ['update'] })).toEqual([control])
   })
 
   it('applies to every kind, including target-driven rows from strangers', async () => {
@@ -943,14 +974,14 @@ describe('MaEarth future-dated items', () => {
     const visible = await entityFollow(stranger, project(owner), {
       createdAt: minutesFromNow(-1),
     })
-    expect(await subjects(viewer)).toEqual(
+    expect(await uris(viewer)).toEqual(
       [viewerFollow, viewerProject, visible].sort(),
     )
   })
 })
 
-describe('MaEarth view createdAt', () => {
-  it("returns the record's own createdAt unchanged, omits an unusable one, and leaves the sort time alone", async () => {
+describe('MaEarth item createdAt and sortAt', () => {
+  it("returns the record's own createdAt unchanged, omits an unusable one, and orders by sortAt, the value the cursor encodes", async () => {
     const viewer = did(),
       author = did()
     await follow(viewer, author)
@@ -970,24 +1001,34 @@ describe('MaEarth view createdAt', () => {
       { indexedAt: '2026-10-14 10:00:00+00' },
     )
 
-    const { feed } = await service.getFeed(request(viewer, { kinds: ['post'] }))
-    expect(feed.map((item) => item.subject)).toEqual([
+    const { feed } = await service.getFeed(
+      request(viewer, { kinds: ['update'] }),
+    )
+    expect(feed.map((item) => item.uri)).toEqual([
       offset,
       impossible,
       unknownOffset,
     ])
-    expect(feed[0]?.view.createdAt).toBe(ownCreatedAt)
-    expect(feed[1]?.view).not.toHaveProperty('createdAt')
-    expect(feed[2]?.view).not.toHaveProperty('createdAt')
-    expect(
-      (await collect(viewer, { kinds: ['post'] })).map(
-        (item) => item.sortValue,
-      ),
-    ).toEqual([
+    expect(feed[0]?.createdAt).toBe(ownCreatedAt)
+    expect(feed[1]).not.toHaveProperty('createdAt')
+    expect(feed[2]).not.toHaveProperty('createdAt')
+    expect(feed.map((item) => item.sortAt)).toEqual([
       '2026-10-14T12:00:00.123456Z',
       '2026-10-14T11:00:00.000000Z',
       '2026-10-14T10:00:00.000000Z',
     ])
+
+    // The cursor encodes the last returned item's sortAt, so a client can resume from it.
+    const first = await service.getFeed(
+      request(viewer, { kinds: ['update'], limit: 1 }),
+    )
+    if (first.cursor === undefined) throw new Error('Expected a cursor')
+    const payload: unknown = JSON.parse(
+      Buffer.from(first.cursor, 'base64url').toString('utf8'),
+    )
+    expect(payload).toMatchObject({
+      value: { value: first.feed[0]?.sortAt, uri: offset },
+    })
   })
 })
 
@@ -996,13 +1037,21 @@ describe('MaEarth item counts', () => {
     likeCount,
     repostCount,
     replyCount,
-  }: MaearthFeedView) => ({
+  }: {
+    likeCount?: number
+    repostCount?: number
+    replyCount?: number
+  }) => ({
     likeCount,
     repostCount,
     replyCount,
   })
+  const expectNoCounts = (value: object | undefined) => {
+    for (const key of ['likeCount', 'repostCount', 'replyCount'])
+      expect(value).not.toHaveProperty(key)
+  }
 
-  it('counts distinct likers and reposters and direct replies, gives a repost item its original post counts, and gives follows none', async () => {
+  it("counts distinct likers and reposters and direct replies on an update item, puts a repost's counts on its subject instead, and gives follows none", async () => {
     const viewer = did(),
       author = did(),
       reposter = did(),
@@ -1051,25 +1100,33 @@ describe('MaEarth item counts', () => {
     await comment(likerB, [], { subjects: { uri: counted } })
 
     const feed = (await service.getFeed(request(viewer))).feed
-    const viewOf = (subject: string) => {
-      const entry = feed.find((item) => item.subject === subject)
-      if (entry === undefined) throw new Error(`Missing feed item ${subject}`)
-      return entry.view
+    const itemOf = (uri: string): ItemView => {
+      const entry = feed.find((item) => item.uri === uri)
+      if (entry === undefined) throw new Error(`Missing feed item ${uri}`)
+      return entry
     }
     const originalCounts = { likeCount: 3, repostCount: 2, replyCount: 3 }
-    expect(countsOf(viewOf(counted))).toEqual(originalCounts)
-    expect(countsOf(viewOf(untouched))).toEqual({
+    expect(countsOf(itemOf(counted))).toEqual(originalCounts)
+    expect(countsOf(itemOf(untouched))).toEqual({
       likeCount: 0,
       repostCount: 0,
       replyCount: 0,
     })
-    expect(countsOf(viewOf(repostItem))).toEqual(originalCounts)
-    const followView = viewOf(viewerFollow)
-    for (const key of ['likeCount', 'repostCount', 'replyCount'])
-      expect(followView).not.toHaveProperty(key)
+    // Item counts always count the item's own uri, so a repost item has none; the
+    // original post's numbers sit on its subject.
+    const repostView = itemOf(repostItem)
+    expectNoCounts(repostView)
+    expect(repostView.subject).toMatchObject({
+      $type: recordViewType,
+      uri: counted,
+      ...originalCounts,
+    })
+    const followView = itemOf(viewerFollow)
+    expectNoCounts(followView)
+    expectNoCounts(followView.subject)
   })
 
-  it('leaves counts out of the skeleton and returns the same subjects', async () => {
+  it('leaves counts out of the skeleton and returns the same URIs', async () => {
     const viewer = did(),
       author = did()
     const viewerFollow = await follow(viewer, author)
@@ -1078,10 +1135,9 @@ describe('MaEarth item counts', () => {
     const skeleton = await new FeedService(registry).getFeedSkeleton(
       request(viewer),
     )
-    expect(skeleton.feed.map((item) => item.subject).sort()).toEqual(
+    expect(skeleton.feed.map((item) => item.uri).sort()).toEqual(
       [liked, viewerFollow].sort(),
     )
-    for (const item of skeleton.feed)
-      expect(Object.keys(item)).toEqual(['subject'])
+    for (const item of skeleton.feed) expect(Object.keys(item)).toEqual(['uri'])
   })
 })
