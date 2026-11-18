@@ -1001,6 +1001,8 @@ describe('MaEarth item counts', () => {
       contentType: 'evidence',
       subjects: [target],
     })
+    // A non-array subjects holding the post's URI is no reply and must not fail the page.
+    await comment(likerB, [], { subjects: { uri: counted } })
 
     const feed = (await service.getFeed(request(viewer))).feed
     const viewOf = (subject: string) => {
