@@ -592,52 +592,69 @@ async function verify() {
   const hydrated = await page('getFeed')
   const skeleton = await page('getFeedSkeleton')
   assert.deepEqual(
-    hydrated.feed.map((item) => item.subject),
+    hydrated.feed.map((item) => item.uri),
     included,
   )
   assert.deepEqual(
     skeleton.feed,
-    included.map((subject) => ({ subject })),
+    included.map((uri) => ({ uri })),
   )
   assert.deepEqual(
-    [...new Set(hydrated.feed.map((item) => item.view.kind))].sort(),
-    ['accountFollow', 'post', 'projectFollow', 'repost'],
+    [...new Set(hydrated.feed.map((item) => item.kind))].sort(),
+    ['account-follow', 'project-follow', 'repost', 'update'],
   )
-  // The view repeats the record's own createdAt text, here the same string the mock wrote.
-  assert(hydrated.feed.every((item) => item.view.createdAt === createdAt))
-  // Every kind carries its record's author, the subject URI's authority.
+  // createdAt repeats the record's own text, here the string the mock wrote, which is
+  // already in the sort time's form, so sortAt (the value the order and cursor use) matches it.
+  assert(hydrated.feed.every((item) => item.createdAt === createdAt))
+  assert(hydrated.feed.every((item) => item.sortAt === createdAt))
+  // Every kind carries its record's author, the item URI's authority, and its own CID.
   assert(
-    hydrated.feed.every(
-      (item) => item.view.actor?.did === item.subject.split('/')[2],
-    ),
+    hydrated.feed.every((item) => item.author?.did === item.uri.split('/')[2]),
   )
-  assert.deepEqual(
-    hydrated.feed.find((item) => item.view.kind === 'repost').view.target,
-    { uri: original },
-  )
-  const viewOf = (index) =>
-    hydrated.feed.find((item) => item.subject === uriOf(events[index])).view
+  assert(hydrated.feed.every((item) => typeof item.cid === 'string'))
+  const itemOf = (index) =>
+    hydrated.feed.find((item) => item.uri === uriOf(events[index]))
+  // A repost's subject is the original post, with the CID the repost names and the post's
+  // counts; the repost item itself has no counts.
+  const repostItem = hydrated.feed.find((item) => item.kind === 'repost')
+  assert.equal(repostItem.subject.$type, 'org.hypercerts.feed.defs#recordView')
+  assert.equal(repostItem.subject.uri, original)
+  assert.equal(repostItem.subject.cid, refCid)
+  for (const key of ['likeCount', 'repostCount', 'replyCount']) {
+    assert(Number.isInteger(repostItem.subject[key]))
+    assert(!(key in repostItem))
+  }
   for (const [index, followedDid] of [
     [0, followed],
     [6, other],
     [7, followed],
   ]) {
-    const view = viewOf(index)
-    assert.equal(view.kind, 'accountFollow')
-    assert.deepEqual(view.target, { did: followedDid })
+    const item = itemOf(index)
+    assert.equal(item.kind, 'account-follow')
+    assert.deepEqual(item.subject, {
+      $type: 'org.hypercerts.feed.defs#actorView',
+      did: followedDid,
+    })
   }
   for (const index of [1, 10]) {
-    const view = viewOf(index)
-    assert.equal(view.kind, 'projectFollow')
-    assert.deepEqual(view.target, { uri: project })
+    const item = itemOf(index)
+    assert.equal(item.kind, 'project-follow')
+    // An entity follow's subject names no CID.
+    assert.deepEqual(item.subject, {
+      $type: 'org.hypercerts.feed.defs#recordView',
+      uri: project,
+    })
   }
   for (const index of [2, 3, 4, 15]) {
-    const view = viewOf(index)
-    assert(!('target' in view))
+    const item = itemOf(index)
+    assert.equal(item.kind, 'update')
+    assert(!('subject' in item))
+    for (const key of ['likeCount', 'repostCount', 'replyCount'])
+      assert(Number.isInteger(item[key]))
   }
   evidence.sample = hydrated
   check(
-    'Both HTTP endpoints: scope, all four kinds, record createdAt, actor, targets and URI-only skeleton',
+    'Both HTTP endpoints: scope, all four kinds, createdAt, sortAt, author, subjects, counts and uri-only skeleton',
   )
   check(
     'Project resolution through real ingestion: a project-type collection counts, an activity-only post matches through its items[], and favorites-type and never-stored collections are excluded',
@@ -655,11 +672,11 @@ async function verify() {
     const current = await page('getFeed', { limit: 2, cursor })
     const metadata = await page('getFeedSkeleton', { limit: 2, cursor })
     assert.deepEqual(
-      current.feed.map((item) => item.subject),
-      metadata.feed.map((item) => item.subject),
+      current.feed.map((item) => item.uri),
+      metadata.feed.map((item) => item.uri),
     )
     assert.equal(current.cursor, metadata.cursor)
-    seen.push(...current.feed.map((item) => item.subject))
+    seen.push(...current.feed.map((item) => item.uri))
     cursor = current.cursor
   } while (cursor)
   assert.deepEqual(seen, included)
@@ -668,22 +685,22 @@ async function verify() {
   )
   const actorOnly = await page('getFeed', { params: { actorDid: stranger } })
   assert.deepEqual(
-    actorOnly.feed.map((item) => item.subject).sort(),
+    actorOnly.feed.map((item) => item.uri).sort(),
     [4, 7, 10, 15].map((index) => uriOf(events[index])).sort(),
   )
-  const kindOnly = await page('getFeed', { params: { kinds: ['post'] } })
+  const kindOnly = await page('getFeed', { params: { kinds: ['update'] } })
   assert.deepEqual(
-    kindOnly.feed.map((item) => item.subject),
+    kindOnly.feed.map((item) => item.uri),
     [2, 3, 4, 15]
       .map((index) => uriOf(events[index]))
       .sort()
       .reverse(),
   )
   const actorAndKind = await page('getFeed', {
-    params: { actorDid: stranger, kinds: ['post'] },
+    params: { actorDid: stranger, kinds: ['update'] },
   })
   assert.deepEqual(
-    actorAndKind.feed.map((item) => item.subject).sort(),
+    actorAndKind.feed.map((item) => item.uri).sort(),
     [4, 15].map((index) => uriOf(events[index])).sort(),
   )
   check(
@@ -700,9 +717,7 @@ async function verify() {
     ),
   ])
   assert(
-    !(await page('getFeed')).feed.some(
-      (item) => item.subject === uriOf(mutable),
-    ),
+    !(await page('getFeed')).feed.some((item) => item.uri === uriOf(mutable)),
   )
   const updatedAttachment = await api('org.hypercerts.context.getAttachment', {
     uri: uriOf(mutable),
@@ -722,9 +737,7 @@ async function verify() {
   )
   const rep = events[11]
   await publish([await event(followed, repost, {}, 'delete', rep.commit.rkey)])
-  assert(
-    !(await page('getFeed')).feed.some((item) => item.subject === uriOf(rep)),
-  )
+  assert(!(await page('getFeed')).feed.some((item) => item.uri === uriOf(rep)))
   const repostsAfterDelete = await api('app.certified.feed.getReposts', {
     subject: original,
     limit: 10,
@@ -742,8 +755,8 @@ async function verify() {
     await event(viewer, accountFollow, {}, 'delete', edge.commit.rkey),
   ])
   const afterUnfollow = await page('getFeed')
-  assert(!afterUnfollow.feed.some((item) => item.subject === uriOf(events[6])))
-  assert(afterUnfollow.feed.some((item) => item.subject === uriOf(events[4])))
+  assert(!afterUnfollow.feed.some((item) => item.uri === uriOf(events[6])))
+  assert(afterUnfollow.feed.some((item) => item.uri === uriOf(events[4])))
   const followAfterDelete = await api('app.certified.graph.getFollows', {
     actor: viewer,
     subjects: [followed],
@@ -776,7 +789,7 @@ async function verify() {
     ),
   ])
   assert.deepEqual(
-    (await page('getFeed')).feed.map((item) => item.subject),
+    (await page('getFeed')).feed.map((item) => item.uri),
     included,
   )
   const restoredFollow = await api('app.certified.graph.getFollows', {
